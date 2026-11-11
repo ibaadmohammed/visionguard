@@ -1,4 +1,4 @@
-# VisionGuard
+# VisionGuard(**Intership Project**)
 
 A browser-based computer vision demo that detects common objects in uploaded images.
 
