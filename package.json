@@ -5,16 +5,17 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "@tensorflow/tfjs": "^4.22.0",
-    "@tensorflow-models/coco-ssd": "^2.2.3"
+    "vite": "latest"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.17",
+    "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
-    "autoprefixer": "^10.4.21"
+    "tailwindcss": "^3.4.17"
   }
 }
