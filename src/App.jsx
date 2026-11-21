@@ -9,6 +9,8 @@ import AnnotationImporter from './components/AnnotationImporter'
 import DatasetEvaluationDashboard from './components/DatasetEvaluationDashboard'
 import { evaluateModelDataset } from './evaluation/datasetEvaluator'
 import { exportDatasetCSV, exportDatasetJSON } from './utils/reportExporter'
+import LiveDetection from './components/LiveDetection'
+import VideoDetection from './components/VideoDetection'
 
 const YOLO_MODEL_ID = 'onnx-community/yolov10s'
 const IOU_THRESHOLD = 0.5
@@ -2308,6 +2310,10 @@ function App() {
             </div>
           )}
         </section>
+        {/* PHASE 5A — LIVE WEBCAM DETECTION */}
+<LiveDetection />
+        {/* PHASE 5B — VIDEO DETECTION */}
+<VideoDetection />
 
         {/* Export benchmark */}
         <div className="mt-5">
