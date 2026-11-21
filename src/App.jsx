@@ -921,95 +921,209 @@ function App() {
 
   async function runDatasetEvaluation() {
     if (!datasetImages.length || datasetBusy || busy || benchmarkBusy) return
-    const missingAnnotations = datasetImages.filter(image => !Array.isArray(image.groundTruth))
+
+    const missingAnnotations = datasetImages.filter(
+      image => !Array.isArray(image.groundTruth)
+    )
+
     if (missingAnnotations.length || datasetImages.every(image => !image.groundTruth?.length)) {
-      setDatasetError('Import valid COCO JSON or YOLO TXT annotations. At least one ground-truth bounding box is required.')
+      setDatasetError(
+        'Import annotations for every dataset image. At least one ground-truth bounding box is required.'
+      )
       return
     }
 
     setDatasetBusy(true)
     setDatasetError('')
     setDatasetReport(null)
-    setDatasetProgress({ completed: 0, total: datasetImages.length, current: 'Loading models…' })
+    setDatasetProgress({
+      completed: 0,
+      total: datasetImages.length,
+      current: 'Loading models…'
+    })
+
     const imageResults = []
+    let yoloDetector = null
+    let cocoModel = null
+    let yoloLoadError = ''
+    let cocoLoadError = ''
 
     try {
-      const yoloDetector = await ensureYoloLoaded()
-      const cocoModel = await ensureCocoLoaded()
+      // Load both models independently. A failure in one model must not
+      // prevent the other model from evaluating the dataset.
+      const [yoloLoad, cocoLoad] = await Promise.allSettled([
+        ensureYoloLoaded(),
+        ensureCocoLoaded()
+      ])
+
+      if (yoloLoad.status === 'fulfilled') {
+        yoloDetector = yoloLoad.value
+      } else {
+        yoloLoadError = yoloLoad.reason?.message || 'YOLOv10s failed to load'
+        console.error('YOLOv10s model loading failed:', yoloLoad.reason)
+      }
+
+      if (cocoLoad.status === 'fulfilled') {
+        cocoModel = cocoLoad.value
+      } else {
+        cocoLoadError = cocoLoad.reason?.message || 'COCO-SSD failed to load'
+        console.error('COCO-SSD model loading failed:', cocoLoad.reason)
+      }
+
+      if (!yoloDetector && !cocoModel) {
+        throw new Error(
+          `Both models failed to load. YOLOv10s: ${yoloLoadError}. COCO-SSD: ${cocoLoadError}`
+        )
+      }
 
       for (let index = 0; index < datasetImages.length; index++) {
         const item = datasetImages[index]
-        setDatasetProgress({ completed: index, total: datasetImages.length, current: item.name })
+        setDatasetProgress({
+          completed: index,
+          total: datasetImages.length,
+          current: item.name
+        })
+
         const result = {
           id: item.id,
           name: item.name,
           groundTruth: item.groundTruth || [],
           yoloPredictions: [],
           cocoPredictions: [],
-          yolo: null,
-          coco: null
+          yolo: yoloDetector ? null : { error: yoloLoadError },
+          coco: cocoModel ? null : { error: cocoLoadError }
         }
 
-        try {
-          const start = performance.now()
-          const predictions = await yoloDetector(item.previewUrl, { threshold: 0.001 })
-          const inferenceMs = performance.now() - start
-          result.yoloPredictions = normalizeYoloPredictions(predictions)
-          result.yolo = { inferenceMs, detections: result.yoloPredictions.length }
-        } catch (error) {
-          result.yolo = { error: error?.message || 'YOLO inference failed' }
+        if (yoloDetector) {
+          try {
+            const start = performance.now()
+            const predictions = await yoloDetector(item.previewUrl, {
+              threshold: 0.001
+            })
+            const inferenceMs = performance.now() - start
+            result.yoloPredictions = normalizeYoloPredictions(predictions)
+            result.yolo = {
+              inferenceMs,
+              detections: result.yoloPredictions.length
+            }
+          } catch (error) {
+            result.yolo = {
+              error: error?.message || 'YOLOv10s inference failed'
+            }
+          }
         }
 
-        try {
-          const imageElement = new Image()
-          imageElement.src = item.previewUrl
-          await new Promise((resolve, reject) => {
-            imageElement.onload = resolve
-            imageElement.onerror = () => reject(new Error('Could not load image for COCO-SSD'))
-          })
-          const start = performance.now()
-          const predictions = await cocoModel.detect(imageElement, 100, 0.001)
-          const inferenceMs = performance.now() - start
-          result.cocoPredictions = predictions
-          result.coco = { inferenceMs, detections: predictions.length }
-        } catch (error) {
-          result.coco = { error: error?.message || 'COCO-SSD inference failed' }
+        if (cocoModel) {
+          try {
+            const imageElement = new Image()
+            await new Promise((resolve, reject) => {
+              imageElement.onload = resolve
+              imageElement.onerror = () => reject(
+                new Error('Could not load image for COCO-SSD')
+              )
+              imageElement.src = item.previewUrl
+            })
+
+            const start = performance.now()
+            const predictions = await cocoModel.detect(imageElement, 100, 0.001)
+            const inferenceMs = performance.now() - start
+            result.cocoPredictions = predictions.map(prediction => ({
+              class: String(prediction.class || '').trim().toLowerCase(),
+              score: Number(prediction.score),
+              bbox: Array.isArray(prediction.bbox)
+                ? prediction.bbox.map(Number)
+                : []
+            })).filter(prediction =>
+              prediction.class &&
+              Number.isFinite(prediction.score) &&
+              prediction.bbox.length === 4 &&
+              prediction.bbox.every(Number.isFinite)
+            )
+            result.coco = {
+              inferenceMs,
+              detections: result.cocoPredictions.length
+            }
+          } catch (error) {
+            result.coco = {
+              error: error?.message || 'COCO-SSD inference failed'
+            }
+          }
         }
 
         imageResults.push(result)
-        setDatasetProgress({ completed: index + 1, total: datasetImages.length, current: item.name })
+        setDatasetProgress({
+          completed: index + 1,
+          total: datasetImages.length,
+          current: item.name
+        })
       }
 
-      const evaluationImages = imageResults.map(item => ({
-        id: item.id,
-        groundTruth: item.groundTruth,
-        yoloPredictions: item.yoloPredictions,
-        cocoPredictions: item.cocoPredictions
-      }))
+      // Do not count inference failures as false negatives. Each model's
+      // metrics use only images where that model completed inference.
+      const yoloEvaluationImages = imageResults
+        .filter(item => !item.yolo?.error)
+        .map(item => ({
+          id: item.id,
+          groundTruth: item.groundTruth,
+          predictions: item.yoloPredictions
+        }))
+
+      const cocoEvaluationImages = imageResults
+        .filter(item => !item.coco?.error)
+        .map(item => ({
+          id: item.id,
+          groundTruth: item.groundTruth,
+          predictions: item.cocoPredictions
+        }))
+
       const meanTime = key => {
-        const times = imageResults.map(item => item[key]?.inferenceMs).filter(Number.isFinite)
-        return times.length ? times.reduce((sum, value) => sum + value, 0) / times.length : 0
+        const times = imageResults
+          .map(item => item[key]?.inferenceMs)
+          .filter(Number.isFinite)
+        return times.length
+          ? times.reduce((sum, value) => sum + value, 0) / times.length
+          : 0
       }
+
       const report = {
         application: 'VisionGuard',
         generatedAt: new Date().toISOString(),
         iouThreshold: 0.5,
+        // AP/mAP uses confidence-ranked predictions; this low inference
+        // cutoff retains candidates rather than applying the UI display slider.
         confidenceThreshold: 0.001,
         totalImages: datasetImages.length,
         processedImages: imageResults.length,
-        totalGroundTruth: datasetImages.reduce((sum, item) => sum + (item.groundTruth?.length || 0), 0),
-        speed: { yolo: meanTime('yolo'), coco: meanTime('coco') },
+        totalGroundTruth: datasetImages.reduce(
+          (sum, item) => sum + (item.groundTruth?.length || 0),
+          0
+        ),
+        modelLoadErrors: {
+          yolo: yoloLoadError || null,
+          coco: cocoLoadError || null
+        },
+        speed: {
+          yolo: meanTime('yolo'),
+          coco: meanTime('coco')
+        },
         evaluation: {
-          yolo: evaluateModelDataset(evaluationImages, 'yoloPredictions'),
-          coco: evaluateModelDataset(evaluationImages, 'cocoPredictions')
+          yolo: evaluateModelDataset(yoloEvaluationImages),
+          coco: evaluateModelDataset(cocoEvaluationImages)
         },
         imageResults
       }
+
       setDatasetReport(report)
-      setModelStatus('Dataset evaluation completed')
+      setModelStatus(
+        yoloLoadError || cocoLoadError
+          ? 'Dataset evaluation completed with a model warning'
+          : 'Dataset evaluation completed'
+      )
     } catch (error) {
       console.error('Dataset evaluation failed:', error)
-      setDatasetError(error?.message || 'Dataset evaluation failed. Check the browser console.')
+      setDatasetError(
+        error?.message || 'Dataset evaluation failed. Check the browser console.'
+      )
     } finally {
       setDatasetBusy(false)
     }

@@ -12,18 +12,29 @@ export function parseCocoAnnotations(json, images) {
   const categoryById = new Map(json.categories.map(item => [item.id, String(item.name || `class_${item.id}`).trim().toLowerCase()]))
   const imported = new Map()
   const unmatched = []
+  const errors = []
   for (const localImage of images) {
     const match = json.images.find(item => basename(item.file_name) === basename(localImage.name))
     if (match) imported.set(localImage.id, [])
   }
   for (const annotation of json.annotations) {
     const sourceImage = imageById.get(annotation.image_id)
-    if (!sourceImage) continue
+    if (!sourceImage) {
+      errors.push(`Annotation ${annotation.id ?? '(unknown id)'}: referenced image_id ${annotation.image_id} was not found`)
+      continue
+    }
     const localImage = images.find(item => basename(item.name) === basename(sourceImage.file_name))
     if (!localImage) { unmatched.push(sourceImage.file_name); continue }
     const category = categoryById.get(annotation.category_id)
     const rawBox = Array.isArray(annotation.bbox) ? annotation.bbox.map(Number) : []
-    if (!category || !validBox(rawBox)) continue
+    if (!category) {
+      errors.push(`Annotation ${annotation.id ?? '(unknown id)'}: category_id ${annotation.category_id} was not found`)
+      continue
+    }
+    if (!validBox(rawBox)) {
+      errors.push(`Annotation ${annotation.id ?? '(unknown id)'}: invalid COCO xywh bounding box`)
+      continue
+    }
     const scaleX = Number(sourceImage.width) > 0 ? localImage.width / Number(sourceImage.width) : 1
     const scaleY = Number(sourceImage.height) > 0 ? localImage.height / Number(sourceImage.height) : 1
     const bbox = [rawBox[0] * scaleX, rawBox[1] * scaleY, rawBox[2] * scaleX, rawBox[3] * scaleY]
@@ -31,7 +42,7 @@ export function parseCocoAnnotations(json, images) {
   }
   const matchedCount = imported.size
   const unmatchedLocalImages = images.filter(item => !imported.has(item.id)).map(item => item.name)
-  return { annotations: imported, matchedImages: matchedCount, unmatchedImages: unmatchedLocalImages, unmatchedAnnotationFiles: [...new Set(unmatched)], annotationCount: [...imported.values()].reduce((sum, items) => sum + items.length, 0) }
+  return { annotations: imported, matchedImages: matchedCount, unmatchedImages: unmatchedLocalImages, unmatchedAnnotationFiles: [...new Set(unmatched)], annotationCount: [...imported.values()].reduce((sum, items) => sum + items.length, 0), errors }
 }
 
 export function parseYoloAnnotations(files, images, classNames = []) {
@@ -72,5 +83,5 @@ export function parseYoloAnnotations(files, images, classNames = []) {
 }
 
 export function parseClassNames(text) {
-  return String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  return String(text || '').split(/\r?\n/).map(line => line.trim())
 }

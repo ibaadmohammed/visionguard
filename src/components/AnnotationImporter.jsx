@@ -27,7 +27,7 @@ export default function AnnotationImporter({ images, onImported }) {
       }
       const attached = images.map(image => ({ ...image, groundTruth: result.annotations.has(image.id) ? result.annotations.get(image.id) : undefined }))
       onImported(attached)
-      const warning = result.errors?.length ? ` ${result.errors.length} invalid line(s): ${result.errors.slice(0, 3).join(' | ')}` : ''
+      const warning = result.errors?.length ? ` Import warnings (${result.errors.length}): ${result.errors.slice(0, 3).join(' | ')}` : ''
       setStatus(`Imported ${result.annotationCount} boxes across ${result.matchedImages} matched image(s).${result.unmatchedImages?.length ? ` Images without annotation files: ${result.unmatchedImages.join(', ')}` : ''}${result.unmatchedAnnotationFiles?.length ? ` Annotation image names not found: ${result.unmatchedAnnotationFiles.join(', ')}` : ''}${warning}`)
     } catch (error) {
       setStatus(error.message || 'Could not import annotations.')
