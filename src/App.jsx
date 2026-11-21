@@ -3,6 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as cocoSsd from '@tensorflow-models/coco-ssd'
 import * as tf from '@tensorflow/tfjs'
 import { pipeline } from '@huggingface/transformers'
+import DatasetUploader from './components/DatasetUploader'
+import DatasetPreview from './components/DatasetPreview'
+import AnnotationImporter from './components/AnnotationImporter'
+import DatasetEvaluationDashboard from './components/DatasetEvaluationDashboard'
+import { evaluateModelDataset } from './evaluation/datasetEvaluator'
+import { exportDatasetCSV, exportDatasetJSON } from './utils/reportExporter'
 
 const YOLO_MODEL_ID = 'onnx-community/yolov10s'
 const IOU_THRESHOLD = 0.5
@@ -48,14 +54,11 @@ function calculateIoU(a, b) {
   return union > 0 ? intersection / union : 0
 }
 
-// Match detections by class and bounding-box overlap.
 function compareDetections(yolo, coco, iouThreshold = IOU_THRESHOLD) {
   const availableCoco = new Set(coco.map((_, index) => index))
   let matched = 0
 
-  const sortedYolo = [...yolo].sort(
-    (a, b) => b.score - a.score
-  )
+  const sortedYolo = [...yolo].sort((a, b) => b.score - a.score)
 
   sortedYolo.forEach(yoloDetection => {
     let bestIndex = -1
@@ -64,9 +67,7 @@ function compareDetections(yolo, coco, iouThreshold = IOU_THRESHOLD) {
     availableCoco.forEach(index => {
       const cocoDetection = coco[index]
 
-      if (yoloDetection.class !== cocoDetection.class) {
-        return
-      }
+      if (yoloDetection.class !== cocoDetection.class) return
 
       const iou = calculateIoU(yoloDetection, cocoDetection)
 
@@ -90,9 +91,7 @@ function compareDetections(yolo, coco, iouThreshold = IOU_THRESHOLD) {
     matched,
     yoloOnly,
     cocoOnly,
-    agreement: total
-      ? (2 * matched / total) * 100
-      : 100
+    agreement: total ? (2 * matched / total) * 100 : 100
   }
 }
 
@@ -105,9 +104,7 @@ function calculateMetrics(
   groundTruth,
   iouThreshold = IOU_THRESHOLD
 ) {
-  const classes = [
-    ...new Set(groundTruth.map(item => item.class))
-  ]
+  const classes = [...new Set(groundTruth.map(item => item.class))]
 
   const perClass = []
   let totalTP = 0
@@ -115,9 +112,7 @@ function calculateMetrics(
   let totalFN = 0
 
   for (const className of classes) {
-    const actual = groundTruth.filter(
-      item => item.class === className
-    )
+    const actual = groundTruth.filter(item => item.class === className)
 
     const predicted = predictions
       .filter(item => item.class === className)
@@ -160,18 +155,14 @@ function calculateMetrics(
     totalFP += classFP
     totalFN += classFN
 
-    // Calculate interpolated AP using 101 recall points.
     let cumulativeTP = 0
     let cumulativeFP = 0
 
     const precisionRecallPoints = []
 
     rankedResults.forEach(result => {
-      if (result === 1) {
-        cumulativeTP++
-      } else {
-        cumulativeFP++
-      }
+      if (result === 1) cumulativeTP++
+      else cumulativeFP++
 
       precisionRecallPoints.push({
         recall: cumulativeTP / actual.length,
@@ -222,8 +213,7 @@ function calculateMetrics(
     : 0
 
   const meanAP = perClass.length
-    ? perClass.reduce((sum, item) => sum + item.ap, 0) /
-      perClass.length
+    ? perClass.reduce((sum, item) => sum + item.ap, 0) / perClass.length
     : 0
 
   return {
@@ -263,6 +253,14 @@ function App() {
     height: 0
   })
 
+  // Phase 4 — Dataset state
+  const [datasetImages, setDatasetImages] = useState([])
+  const datasetImagesRef = useRef([])
+  const [datasetBusy, setDatasetBusy] = useState(false)
+  const [datasetProgress, setDatasetProgress] = useState({ completed: 0, total: 0, current: '' })
+  const [datasetReport, setDatasetReport] = useState(null)
+  const [datasetError, setDatasetError] = useState('')
+
   const [detections, setDetections] = useState([])
   const [error, setError] = useState('')
   const [threshold, setThreshold] = useState(50)
@@ -297,13 +295,8 @@ function App() {
   // --------------------------------------------------
 
   async function ensureYoloLoaded() {
-    if (yoloDetectorRef.current) {
-      return yoloDetectorRef.current
-    }
-
-    if (yoloLoadingRef.current) {
-      return yoloLoadingRef.current
-    }
+    if (yoloDetectorRef.current) return yoloDetectorRef.current
+    if (yoloLoadingRef.current) return yoloLoadingRef.current
 
     const loadingTask = (async () => {
       setModelStatus('Downloading YOLOv10s model...')
@@ -327,10 +320,7 @@ function App() {
       if (!detector) {
         setModelStatus('Loading YOLOv10s with WASM...')
 
-        detector = await pipeline(
-          'object-detection',
-          YOLO_MODEL_ID
-        )
+        detector = await pipeline('object-detection', YOLO_MODEL_ID)
       }
 
       yoloDetectorRef.current = detector
@@ -349,13 +339,8 @@ function App() {
   }
 
   async function ensureCocoLoaded() {
-    if (cocoModelRef.current) {
-      return cocoModelRef.current
-    }
-
-    if (cocoLoadingRef.current) {
-      return cocoLoadingRef.current
-    }
+    if (cocoModelRef.current) return cocoModelRef.current
+    if (cocoLoadingRef.current) return cocoLoadingRef.current
 
     const loadingTask = (async () => {
       setModelStatus('Initializing TensorFlow.js...')
@@ -363,9 +348,7 @@ function App() {
       try {
         const webglReady = await tf.setBackend('webgl')
 
-        if (!webglReady) {
-          await tf.setBackend('cpu')
-        }
+        if (!webglReady) await tf.setBackend('cpu')
       } catch (webglError) {
         console.warn('WebGL unavailable:', webglError)
         await tf.setBackend('cpu')
@@ -398,16 +381,62 @@ function App() {
   }
 
   // --------------------------------------------------
-  // Image URL cleanup
+  // Image and dataset URL cleanup
   // --------------------------------------------------
 
   useEffect(() => {
     if (!imageUrl) return
 
-    return () => {
-      URL.revokeObjectURL(imageUrl)
-    }
+    return () => URL.revokeObjectURL(imageUrl)
   }, [imageUrl])
+
+  useEffect(() => {
+    datasetImagesRef.current = datasetImages
+  }, [datasetImages])
+
+  useEffect(() => {
+    return () => {
+      datasetImagesRef.current.forEach(image => {
+        URL.revokeObjectURL(image.previewUrl)
+      })
+    }
+  }, [])
+
+  // --------------------------------------------------
+  // Phase 4 — Dataset management
+  // --------------------------------------------------
+
+  function handleImagesAdded(newImages) {
+    setDatasetReport(null)
+    setDatasetImages(previous => [...previous, ...newImages])
+  }
+
+  function handleAnnotationsImported(updatedImages) {
+    setDatasetImages(updatedImages)
+    setDatasetReport(null)
+    setDatasetError('')
+  }
+
+  function handleRemoveImage(id) {
+    const removed = datasetImages.find(image => image.id === id)
+
+    if (removed) {
+      URL.revokeObjectURL(removed.previewUrl)
+    }
+
+    setDatasetImages(previous => previous.filter(image => image.id !== id))
+    setDatasetReport(null)
+  }
+
+  function handleClearDataset() {
+    datasetImages.forEach(image => {
+      URL.revokeObjectURL(image.previewUrl)
+    })
+
+    setDatasetImages([])
+    setDatasetReport(null)
+    setDatasetError('')
+  }
 
   // --------------------------------------------------
   // Detection filters
@@ -415,8 +444,7 @@ function App() {
 
   const filteredDetections = useMemo(() => {
     return detections.filter(detection => {
-      const confidenceMatch =
-        detection.score >= threshold / 100
+      const confidenceMatch = detection.score >= threshold / 100
 
       const classMatch =
         selectedClass === 'all' ||
@@ -427,16 +455,12 @@ function App() {
   }, [detections, threshold, selectedClass])
 
   const objectClasses = useMemo(() => {
-    return [
-      ...new Set(detections.map(d => d.class))
-    ].sort()
+    return [...new Set(detections.map(d => d.class))].sort()
   }, [detections])
 
   const classCounts = useMemo(() => {
     return filteredDetections.reduce((acc, detection) => {
-      acc[detection.class] =
-        (acc[detection.class] || 0) + 1
-
+      acc[detection.class] = (acc[detection.class] || 0) + 1
       return acc
     }, {})
   }, [filteredDetections])
@@ -569,11 +593,9 @@ function App() {
     ctx.lineWidth = 3
     ctx.font = 'bold 13px sans-serif'
 
-    const boxes = draftBox
-      ? [...groundTruth, draftBox]
-      : groundTruth
+    const boxes = draftBox ? [...groundTruth, draftBox] : groundTruth
 
-    boxes.forEach((box, index) => {
+    boxes.forEach(box => {
       const [x, y, w, h] = box.bbox
 
       const bx = x * scaleX
@@ -594,32 +616,19 @@ function App() {
       const textWidth = ctx.measureText(label).width
 
       ctx.fillStyle = '#60a5fa'
-      ctx.fillRect(
-        bx,
-        Math.max(0, by - 23),
-        textWidth + 12,
-        22
-      )
+      ctx.fillRect(bx, Math.max(0, by - 23), textWidth + 12, 22)
 
       ctx.fillStyle = '#082f49'
-      ctx.fillText(
-        label,
-        bx + 6,
-        Math.max(11, by - 12)
-      )
+      ctx.fillText(label, bx + 6, Math.max(11, by - 12))
     })
   }
 
   useEffect(() => {
-    if (imageReady) {
-      draw(filteredDetections)
-    }
+    if (imageReady) draw(filteredDetections)
   }, [filteredDetections, imageReady, imageSize])
 
   useEffect(() => {
-    if (imageReady) {
-      drawGroundTruth()
-    }
+    if (imageReady) drawGroundTruth()
   }, [groundTruth, draftBox, imageReady, imageSize])
 
   // --------------------------------------------------
@@ -654,6 +663,7 @@ function App() {
     if (!point) return
 
     setAnnotationStart(point)
+
     setDraftBox({
       class: annotationClass.trim().toLowerCase(),
       score: 1,
@@ -750,7 +760,6 @@ function App() {
     })
 
     setImageUrl(URL.createObjectURL(file))
-
     event.target.value = ''
   }
 
@@ -759,7 +768,7 @@ function App() {
   // --------------------------------------------------
 
   async function detect() {
-    if (!imageUrl || !imageReady || busy) return
+    if (!imageUrl || !imageReady || busy || datasetBusy) return
 
     setBusy(true)
     setError('')
@@ -772,7 +781,6 @@ function App() {
 
       if (selectedModel === 'yolo') {
         const detector = await ensureYoloLoaded()
-
         const start = performance.now()
 
         const predictions = await detector(imageUrl, {
@@ -785,14 +793,9 @@ function App() {
         setActiveModelName('YOLOv10s')
       } else {
         const model = await ensureCocoLoaded()
-
         const start = performance.now()
 
-        results = await model.detect(
-          imageRef.current,
-          100,
-          0.05
-        )
+        results = await model.detect(imageRef.current, 100, 0.05)
 
         elapsed = performance.now() - start
         setActiveModelName('COCO-SSD MobileNet V2')
@@ -821,7 +824,7 @@ function App() {
   // --------------------------------------------------
 
   async function runBenchmark() {
-    if (!imageUrl || !imageReady || busy || benchmarkBusy) return
+    if (!imageUrl || !imageReady || busy || benchmarkBusy || datasetBusy) return
 
     setBenchmarkBusy(true)
     setBusy(true)
@@ -836,14 +839,8 @@ function App() {
 
       setModelStatus('Warming up both models...')
 
-      // Warm-up runs are excluded from benchmark timings.
       await yoloDetector(imageUrl, { threshold: 0.05 })
-
-      await cocoModel.detect(
-        imageRef.current,
-        100,
-        0.05
-      )
+      await cocoModel.detect(imageRef.current, 100, 0.05)
 
       const RUNS = 3
       const yoloTimes = []
@@ -919,6 +916,106 @@ function App() {
   }
 
   // --------------------------------------------------
+  // Phase 4 — Multi-image inference and dataset evaluation
+  // --------------------------------------------------
+
+  async function runDatasetEvaluation() {
+    if (!datasetImages.length || datasetBusy || busy || benchmarkBusy) return
+    const missingAnnotations = datasetImages.filter(image => !Array.isArray(image.groundTruth))
+    if (missingAnnotations.length || datasetImages.every(image => !image.groundTruth?.length)) {
+      setDatasetError('Import valid COCO JSON or YOLO TXT annotations. At least one ground-truth bounding box is required.')
+      return
+    }
+
+    setDatasetBusy(true)
+    setDatasetError('')
+    setDatasetReport(null)
+    setDatasetProgress({ completed: 0, total: datasetImages.length, current: 'Loading models…' })
+    const imageResults = []
+
+    try {
+      const yoloDetector = await ensureYoloLoaded()
+      const cocoModel = await ensureCocoLoaded()
+
+      for (let index = 0; index < datasetImages.length; index++) {
+        const item = datasetImages[index]
+        setDatasetProgress({ completed: index, total: datasetImages.length, current: item.name })
+        const result = {
+          id: item.id,
+          name: item.name,
+          groundTruth: item.groundTruth || [],
+          yoloPredictions: [],
+          cocoPredictions: [],
+          yolo: null,
+          coco: null
+        }
+
+        try {
+          const start = performance.now()
+          const predictions = await yoloDetector(item.previewUrl, { threshold: 0.001 })
+          const inferenceMs = performance.now() - start
+          result.yoloPredictions = normalizeYoloPredictions(predictions)
+          result.yolo = { inferenceMs, detections: result.yoloPredictions.length }
+        } catch (error) {
+          result.yolo = { error: error?.message || 'YOLO inference failed' }
+        }
+
+        try {
+          const imageElement = new Image()
+          imageElement.src = item.previewUrl
+          await new Promise((resolve, reject) => {
+            imageElement.onload = resolve
+            imageElement.onerror = () => reject(new Error('Could not load image for COCO-SSD'))
+          })
+          const start = performance.now()
+          const predictions = await cocoModel.detect(imageElement, 100, 0.001)
+          const inferenceMs = performance.now() - start
+          result.cocoPredictions = predictions
+          result.coco = { inferenceMs, detections: predictions.length }
+        } catch (error) {
+          result.coco = { error: error?.message || 'COCO-SSD inference failed' }
+        }
+
+        imageResults.push(result)
+        setDatasetProgress({ completed: index + 1, total: datasetImages.length, current: item.name })
+      }
+
+      const evaluationImages = imageResults.map(item => ({
+        id: item.id,
+        groundTruth: item.groundTruth,
+        yoloPredictions: item.yoloPredictions,
+        cocoPredictions: item.cocoPredictions
+      }))
+      const meanTime = key => {
+        const times = imageResults.map(item => item[key]?.inferenceMs).filter(Number.isFinite)
+        return times.length ? times.reduce((sum, value) => sum + value, 0) / times.length : 0
+      }
+      const report = {
+        application: 'VisionGuard',
+        generatedAt: new Date().toISOString(),
+        iouThreshold: 0.5,
+        confidenceThreshold: 0.001,
+        totalImages: datasetImages.length,
+        processedImages: imageResults.length,
+        totalGroundTruth: datasetImages.reduce((sum, item) => sum + (item.groundTruth?.length || 0), 0),
+        speed: { yolo: meanTime('yolo'), coco: meanTime('coco') },
+        evaluation: {
+          yolo: evaluateModelDataset(evaluationImages, 'yoloPredictions'),
+          coco: evaluateModelDataset(evaluationImages, 'cocoPredictions')
+        },
+        imageResults
+      }
+      setDatasetReport(report)
+      setModelStatus('Dataset evaluation completed')
+    } catch (error) {
+      console.error('Dataset evaluation failed:', error)
+      setDatasetError(error?.message || 'Dataset evaluation failed. Check the browser console.')
+    } finally {
+      setDatasetBusy(false)
+    }
+  }
+
+  // --------------------------------------------------
   // Clear analysis
   // --------------------------------------------------
 
@@ -960,7 +1057,6 @@ function App() {
     if (!img || !filteredDetections.length) return
 
     const output = document.createElement('canvas')
-
     output.width = img.naturalWidth
     output.height = img.naturalHeight
 
@@ -968,7 +1064,6 @@ function App() {
     if (!ctx) return
 
     ctx.drawImage(img, 0, 0)
-
     ctx.lineWidth = Math.max(3, img.naturalWidth / 500)
 
     ctx.font = `bold ${Math.max(
@@ -990,7 +1085,6 @@ function App() {
       ctx.strokeRect(x, y, w, h)
 
       const labelY = Math.max(0, y - labelHeight)
-
       ctx.fillRect(x, labelY, textWidth + 16, labelHeight)
 
       ctx.fillStyle = '#052e24'
@@ -1022,7 +1116,6 @@ function App() {
       analyzedAt: new Date().toISOString(),
       inferenceTimeMs: inferenceTime,
       confidenceThreshold: threshold,
-
       totalDetections: filteredDetections.length,
       uniqueCategories: uniqueObjects,
 
@@ -1159,31 +1252,23 @@ function App() {
 
         <div className="mt-4 grid grid-cols-3 gap-2 text-center">
           <div className="rounded-lg bg-slate-900 p-3">
-            <p className="text-xl font-bold text-emerald-300">
-              {metrics.tp}
-            </p>
+            <p className="text-xl font-bold text-emerald-300">{metrics.tp}</p>
             <p className="text-xs text-slate-500">TP</p>
           </div>
 
           <div className="rounded-lg bg-slate-900 p-3">
-            <p className="text-xl font-bold text-rose-300">
-              {metrics.fp}
-            </p>
+            <p className="text-xl font-bold text-rose-300">{metrics.fp}</p>
             <p className="text-xs text-slate-500">FP</p>
           </div>
 
           <div className="rounded-lg bg-slate-900 p-3">
-            <p className="text-xl font-bold text-amber-300">
-              {metrics.fn}
-            </p>
+            <p className="text-xl font-bold text-amber-300">{metrics.fn}</p>
             <p className="text-xs text-slate-500">FN</p>
           </div>
         </div>
 
         <div className="mt-5">
-          <h4 className="text-sm font-semibold">
-            Per-class evaluation
-          </h4>
+          <h4 className="text-sm font-semibold">Per-class evaluation</h4>
 
           <div className="mt-3 space-y-2">
             {metrics.perClass.map(item => (
@@ -1192,7 +1277,6 @@ function App() {
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-900 p-3 text-sm"
               >
                 <span className="capitalize">{item.class}</span>
-
                 <span className="text-slate-400">
                   AP: {item.ap.toFixed(1)}%
                 </span>
@@ -1263,9 +1347,7 @@ function App() {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-xl font-bold">
-                  Image analyzer
-                </h2>
+                <h2 className="text-xl font-bold">Image analyzer</h2>
                 <p className="mt-1 text-sm text-slate-400">
                   JPG, PNG or WebP supported.
                 </p>
@@ -1314,12 +1396,8 @@ function App() {
                 }}
                 className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-orange-400"
               >
-                <option value="yolo">
-                  YOLOv10s — ONNX Runtime
-                </option>
-                <option value="coco">
-                  COCO-SSD — MobileNet V2
-                </option>
+                <option value="yolo">YOLOv10s — ONNX Runtime</option>
+                <option value="coco">COCO-SSD — MobileNet V2</option>
               </select>
 
               <p className="mt-2 text-xs text-slate-500">
@@ -1392,15 +1470,13 @@ function App() {
             </div>
 
             {error && (
-              <p className="mt-3 text-sm text-rose-300">
-                {error}
-              </p>
+              <p className="mt-3 text-sm text-rose-300">{error}</p>
             )}
 
             {/* Main actions */}
             <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
-                disabled={!imageReady || busy}
+                disabled={!imageReady || busy || datasetBusy}
                 onClick={detect}
                 className="rounded-xl bg-orange-400 py-3 font-bold text-slate-950 transition hover:bg-orange-300 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -1418,7 +1494,7 @@ function App() {
 
             <button
               onClick={runBenchmark}
-              disabled={!imageReady || busy || benchmarkBusy}
+              disabled={!imageReady || busy || benchmarkBusy || datasetBusy}
               className="mt-3 w-full rounded-xl border border-orange-400/40 bg-orange-400/10 py-3 font-bold text-orange-300 transition hover:bg-orange-400/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {benchmarkBusy
@@ -1454,9 +1530,7 @@ function App() {
           {/* Results panel */}
           <aside className="rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
 
-            <h2 className="text-xl font-bold">
-              Detection results
-            </h2>
+            <h2 className="text-xl font-bold">Detection results</h2>
 
             <p className="mt-1 text-sm text-slate-400">
               Objects recognized by the selected model.
@@ -1487,9 +1561,7 @@ function App() {
               />
 
               <div className="col-span-2 rounded-xl bg-slate-950 p-4">
-                <p className="text-xs text-slate-400">
-                  Inference time
-                </p>
+                <p className="text-xs text-slate-400">Inference time</p>
                 <p className="mt-1 text-2xl font-bold">
                   {inferenceTime !== null
                     ? `${inferenceTime.toFixed(1)} ms`
@@ -1515,9 +1587,7 @@ function App() {
                 max="95"
                 step="5"
                 value={threshold}
-                onChange={event =>
-                  setThreshold(Number(event.target.value))
-                }
+                onChange={event => setThreshold(Number(event.target.value))}
                 className="mt-3 w-full accent-orange-400"
               />
 
@@ -1542,8 +1612,7 @@ function App() {
 
                 {objectClasses.map(objectClass => (
                   <option key={objectClass} value={objectClass}>
-                    {objectClass.charAt(0).toUpperCase() +
-                      objectClass.slice(1)}
+                    {objectClass.charAt(0).toUpperCase() + objectClass.slice(1)}
                   </option>
                 ))}
               </select>
@@ -1560,9 +1629,7 @@ function App() {
                   {Object.entries(classCounts).map(([name, count]) => (
                     <div key={name}>
                       <div className="flex justify-between text-sm">
-                        <span className="capitalize text-slate-300">
-                          {name}
-                        </span>
+                        <span className="capitalize text-slate-300">{name}</span>
                         <span className="font-semibold text-orange-400">
                           {count}
                         </span>
@@ -1586,9 +1653,7 @@ function App() {
 
             {/* Detection list */}
             <div className="mt-6">
-              <h3 className="text-sm font-semibold">
-                Detected objects
-              </h3>
+              <h3 className="text-sm font-semibold">Detected objects</h3>
 
               <div className="mt-3 max-h-64 space-y-3 overflow-y-auto pr-1">
                 {filteredDetections.map((d, index) => (
@@ -1597,9 +1662,7 @@ function App() {
                     className="rounded-xl border border-slate-800 bg-slate-950 p-4"
                   >
                     <div className="flex justify-between gap-3">
-                      <span className="font-semibold capitalize">
-                        {d.class}
-                      </span>
+                      <span className="font-semibold capitalize">{d.class}</span>
                       <span className="text-sm text-emerald-300">
                         {Math.round(d.score * 100)}%
                       </span>
@@ -1659,9 +1722,7 @@ function App() {
 
           {!benchmark && !benchmarkBusy && (
             <div className="mt-6 rounded-xl border border-dashed border-slate-700 p-8 text-center">
-              <p className="font-semibold">
-                No benchmark results yet
-              </p>
+              <p className="font-semibold">No benchmark results yet</p>
               <p className="mt-2 text-sm text-slate-500">
                 Upload an image and run the dual-model benchmark.
               </p>
@@ -1671,9 +1732,7 @@ function App() {
           {benchmarkBusy && (
             <div className="mt-6 rounded-xl bg-slate-950 p-8 text-center">
               <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-slate-700 border-t-orange-400" />
-              <p className="mt-4 font-semibold">
-                Running model benchmarks
-              </p>
+              <p className="mt-4 font-semibold">Running model benchmarks</p>
               <p className="mt-2 text-sm text-slate-500">
                 Loading, warming up and timing both models.
               </p>
@@ -1709,25 +1768,19 @@ function App() {
 
                     <p className="mt-1 text-3xl font-bold">
                       {model.result.averageMs.toFixed(2)}
-                      <span className="ml-1 text-sm text-slate-500">
-                        ms
-                      </span>
+                      <span className="ml-1 text-sm text-slate-500">ms</span>
                     </p>
 
                     <div className="mt-4 grid grid-cols-2 gap-3">
                       <div>
-                        <p className="text-xs text-slate-500">
-                          Detections
-                        </p>
+                        <p className="text-xs text-slate-500">Detections</p>
                         <p className="mt-1 text-xl font-bold">
                           {model.result.detections}
                         </p>
                       </div>
 
                       <div>
-                        <p className="text-xs text-slate-500">
-                          Estimated FPS
-                        </p>
+                        <p className="text-xs text-slate-500">Estimated FPS</p>
                         <p className="mt-1 text-xl font-bold">
                           {model.result.fps.toFixed(2)}
                         </p>
@@ -1738,23 +1791,14 @@ function App() {
               </div>
 
               <div className="mt-7 rounded-xl bg-slate-950 p-5">
-                <h3 className="font-semibold">
-                  Inference time comparison
-                </h3>
-
+                <h3 className="font-semibold">Inference time comparison</h3>
                 <p className="mt-1 text-xs text-slate-500">
                   Lower is faster. Average of {benchmark.runs} measured runs.
                 </p>
 
                 {[
-                  {
-                    name: 'YOLOv10s',
-                    time: benchmark.yolo.averageMs
-                  },
-                  {
-                    name: 'COCO-SSD',
-                    time: benchmark.coco.averageMs
-                  }
+                  { name: 'YOLOv10s', time: benchmark.yolo.averageMs },
+                  { name: 'COCO-SSD', time: benchmark.coco.averageMs }
                 ].map(item => {
                   const maxTime = Math.max(
                     benchmark.yolo.averageMs,
@@ -1775,10 +1819,7 @@ function App() {
                         <div
                           className="h-full rounded-full bg-orange-400 transition-all"
                           style={{
-                            width: `${Math.max(
-                              2,
-                              (item.time / maxTime) * 100
-                            )}%`
+                            width: `${Math.max(2, (item.time / maxTime) * 100)}%`
                           }}
                         />
                       </div>
@@ -1788,10 +1829,7 @@ function App() {
               </div>
 
               <div className="mt-7 rounded-xl bg-slate-950 p-5">
-                <h3 className="font-semibold">
-                  Detection agreement
-                </h3>
-
+                <h3 className="font-semibold">Detection agreement</h3>
                 <p className="mt-1 text-sm text-slate-400">
                   Same-class detections matched at an IoU of 50% or higher.
                 </p>
@@ -1805,28 +1843,14 @@ function App() {
                 </p>
 
                 <div className="mt-5 grid grid-cols-3 gap-3 text-center">
-                  <MetricCard
-                    label="Matched"
-                    value={comparison.matched}
-                    color="text-emerald-300"
-                  />
-                  <MetricCard
-                    label="YOLO only"
-                    value={comparison.yoloOnly}
-                    color="text-orange-300"
-                  />
-                  <MetricCard
-                    label="COCO only"
-                    value={comparison.cocoOnly}
-                    color="text-sky-300"
-                  />
+                  <MetricCard label="Matched" value={comparison.matched} color="text-emerald-300" />
+                  <MetricCard label="YOLO only" value={comparison.yoloOnly} color="text-orange-300" />
+                  <MetricCard label="COCO only" value={comparison.cocoOnly} color="text-sky-300" />
                 </div>
               </div>
 
               <div className="mt-7">
-                <h3 className="font-semibold">
-                  Individual inference runs
-                </h3>
+                <h3 className="font-semibold">Individual inference runs</h3>
 
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full text-left text-sm">
@@ -1840,16 +1864,11 @@ function App() {
 
                     <tbody>
                       {benchmark.yolo.times.map((time, index) => (
-                        <tr
-                          key={index}
-                          className="border-t border-slate-800"
-                        >
+                        <tr key={index} className="border-t border-slate-800">
                           <td className="py-3 text-slate-400">
                             Run {index + 1}
                           </td>
-                          <td className="py-3">
-                            {time.toFixed(2)} ms
-                          </td>
+                          <td className="py-3">{time.toFixed(2)} ms</td>
                           <td className="py-3">
                             {benchmark.coco.times[index].toFixed(2)} ms
                           </td>
@@ -1872,16 +1891,13 @@ function App() {
             Phase 03B · Ground-truth laboratory
           </p>
 
-          <h2 className="mt-2 text-2xl font-bold">
-            Accuracy evaluation
-          </h2>
+          <h2 className="mt-2 text-2xl font-bold">Accuracy evaluation</h2>
 
           <p className="mt-1 text-sm text-slate-400">
             Label objects manually and evaluate both models against
             your annotations.
           </p>
 
-          {/* Annotation instructions */}
           <div className="mt-5 rounded-xl border border-sky-400/20 bg-sky-400/5 p-4">
             <p className="font-semibold text-sky-300">
               How to create ground truth
@@ -1896,7 +1912,6 @@ function App() {
             </ol>
           </div>
 
-          {/* Annotation controls */}
           <div className="mt-6 grid gap-3 sm:grid-cols-[1fr_auto]">
             <div>
               <label className="text-sm font-semibold">
@@ -1959,12 +1974,9 @@ function App() {
             </p>
           )}
 
-          {/* Ground truth list */}
           {groundTruth.length > 0 && (
             <div className="mt-5">
-              <h3 className="text-sm font-semibold">
-                Your annotations
-              </h3>
+              <h3 className="text-sm font-semibold">Your annotations</h3>
 
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {groundTruth.map((item, index) => (
@@ -1993,13 +2005,10 @@ function App() {
             </div>
           )}
 
-          {/* Evaluation results */}
           <div className="mt-8 border-t border-slate-800 pt-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-xl font-bold">
-                  Evaluation results
-                </h3>
+                <h3 className="text-xl font-bold">Evaluation results</h3>
                 <p className="mt-1 text-sm text-slate-400">
                   Model predictions compared with your manual annotations.
                 </p>
@@ -2048,32 +2057,22 @@ function App() {
 
                   <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                     <div>
-                      <p className="text-xs text-slate-500">
-                        IoU threshold
-                      </p>
+                      <p className="text-xs text-slate-500">IoU threshold</p>
                       <p className="mt-1 font-bold">50%</p>
                     </div>
 
                     <div>
-                      <p className="text-xs text-slate-500">
-                        Confidence
-                      </p>
+                      <p className="text-xs text-slate-500">Confidence</p>
                       <p className="mt-1 font-bold">{threshold}%</p>
                     </div>
 
                     <div>
-                      <p className="text-xs text-slate-500">
-                        Ground truth
-                      </p>
-                      <p className="mt-1 font-bold">
-                        {groundTruth.length}
-                      </p>
+                      <p className="text-xs text-slate-500">Ground truth</p>
+                      <p className="mt-1 font-bold">{groundTruth.length}</p>
                     </div>
 
                     <div>
-                      <p className="text-xs text-slate-500">
-                        Classes labelled
-                      </p>
+                      <p className="text-xs text-slate-500">Classes labelled</p>
                       <p className="mt-1 font-bold">
                         {new Set(groundTruth.map(item => item.class)).size}
                       </p>
@@ -2083,6 +2082,117 @@ function App() {
               </>
             )}
           </div>
+        </section>
+
+        {/* ==========================================
+            PHASE 4 — DATASET UPLOAD & PREVIEW
+        ========================================== */}
+
+        <section className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-violet-400">
+                Phase 04 · Dataset laboratory
+              </p>
+
+              <h2 className="mt-2 text-2xl font-bold">
+                Dataset evaluation
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-400">
+                Upload images, import ground-truth labels, then evaluate both detection models across the dataset.
+              </p>
+            </div>
+
+            <span className="rounded-full bg-violet-400/10 px-3 py-2 text-xs text-violet-300">
+              {datasetImages.length} images uploaded
+            </span>
+          </div>
+
+          <div className={datasetBusy ? 'pointer-events-none mt-6 opacity-50' : 'mt-6'}>
+            <DatasetUploader
+              images={datasetImages}
+              onImagesAdded={handleImagesAdded}
+            />
+          </div>
+
+          <div className={datasetBusy ? 'pointer-events-none mt-6 opacity-50' : 'mt-6'}>
+            <AnnotationImporter images={datasetImages} onImported={handleAnnotationsImported} />
+          </div>
+
+          <div className={datasetBusy ? 'pointer-events-none mt-6 opacity-50' : 'mt-6'}>
+            <DatasetPreview
+              images={datasetImages}
+              onRemove={handleRemoveImage}
+              onClear={handleClearDataset}
+            />
+          </div>
+
+          {datasetImages.length > 0 && (
+            <div className="mt-6 space-y-3">
+              <button
+                type="button"
+                onClick={runDatasetEvaluation}
+                disabled={datasetBusy || busy || benchmarkBusy || datasetImages.every(image => !image.groundTruth?.length)}
+                className="w-full rounded-xl bg-violet-400 py-3 font-bold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {datasetBusy ? `Evaluating dataset… ${datasetProgress.completed}/${datasetProgress.total}` : 'Run YOLOv10s + COCO-SSD Dataset Evaluation'}
+              </button>
+              {datasetBusy && <div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full bg-violet-400 transition-all" style={{ width: `${datasetProgress.total ? datasetProgress.completed / datasetProgress.total * 100 : 0}%` }} /></div>}
+              {datasetBusy && <p className="text-xs text-slate-400">Processing: {datasetProgress.current}. Each model runs independently; individual failures won't stop the remaining images.</p>}
+              {datasetError && <p className="rounded-lg bg-rose-400/10 p-3 text-sm text-rose-300">{datasetError}</p>}
+            </div>
+          )}
+
+          {datasetReport && (
+            <div className="mt-6 space-y-4">
+              <DatasetEvaluationDashboard report={datasetReport} />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button type="button" onClick={() => exportDatasetJSON(datasetReport)} className="rounded-xl border border-slate-700 py-3 font-semibold hover:border-violet-300">↓ Export dataset JSON report</button>
+                <button type="button" onClick={() => exportDatasetCSV(datasetReport)} className="rounded-xl border border-slate-700 py-3 font-semibold hover:border-violet-300">↓ Export dataset CSV report</button>
+              </div>
+            </div>
+          )}
+
+          {datasetImages.length > 0 && (
+            <div className="mt-5 rounded-xl border border-violet-400/20 bg-violet-400/5 p-4">
+              <p className="font-semibold text-violet-300">
+                Dataset successfully loaded
+              </p>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Import annotations above, then run both models over every image to generate dataset-wide metrics and reports.
+              </p>
+
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="rounded-lg bg-slate-950 p-3">
+                  <p className="text-xs text-slate-500">Total images</p>
+                  <p className="mt-1 text-xl font-bold text-violet-300">
+                    {datasetImages.length}
+                  </p>
+                </div>
+
+                <div className="rounded-lg bg-slate-950 p-3">
+                  <p className="text-xs text-slate-500">Total size</p>
+                  <p className="mt-1 text-xl font-bold">
+                    {(
+                      datasetImages.reduce(
+                        (total, image) => total + image.size,
+                        0
+                      ) / (1024 * 1024)
+                    ).toFixed(2)} MB
+                  </p>
+                </div>
+
+                <div className="col-span-2 rounded-lg bg-slate-950 p-3 sm:col-span-1">
+                  <p className="text-xs text-slate-500">Supported formats</p>
+                  <p className="mt-1 text-sm font-bold">
+                    JPG · PNG · WebP
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Export benchmark */}
