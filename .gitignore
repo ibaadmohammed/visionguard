@@ -1,4 +1,24 @@
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Backend dependencies
+server/node_modules/
+
+# Uploaded files
+server/uploads/
+
+# Logs and temporary files
+server/*.log
+server/logs/
+server/tmp/
+server/temp/
+
+# Database backups
+*.sql.backup
+*.dump
+*.bak
+# Frontend dependencies and build output
 node_modules/
 dist/
-.env
-.env.local
