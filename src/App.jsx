@@ -3,14 +3,22 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as cocoSsd from '@tensorflow-models/coco-ssd'
 import * as tf from '@tensorflow/tfjs'
 import { pipeline } from '@huggingface/transformers'
-import DatasetUploader from './components/DatasetUploader'
-import DatasetPreview from './components/DatasetPreview'
-import AnnotationImporter from './components/AnnotationImporter'
-import DatasetEvaluationDashboard from './components/DatasetEvaluationDashboard'
-import { evaluateModelDataset } from './evaluation/datasetEvaluator'
-import { exportDatasetCSV, exportDatasetJSON } from './utils/reportExporter'
-import LiveDetection from './components/LiveDetection'
-import VideoDetection from './components/VideoDetection'
+import DatasetUploader from './components/DatasetUploader.jsx'
+import DatasetPreview from './components/DatasetPreview.jsx'
+import AnnotationImporter from './components/AnnotationImporter.jsx'
+import DatasetEvaluationDashboard from './components/DatasetEvaluationDashboard.jsx'
+import { evaluateModelDataset } from './evaluation/datasetEvaluator.js'
+import { exportDatasetCSV, exportDatasetJSON } from './utils/reportExporter.js'
+import LiveDetection from './components/LiveDetection.jsx'
+import VideoDetection from './components/VideoDetection.jsx'
+import { analyzeCrossModelDataset } from './evaluation/crossModelVerification.js'
+import CrossModelDashboard from './components/CrossModelDashboard.jsx'
+import { analyzeConditionPerformance } from './evaluation/conditionAnalysis.js'
+import ConditionsAnalysisDashboard from './components/ConditionsAnalysisDashboard.jsx'
+import { analyzeDatasetBenchmark } from './evaluation/datasetBenchmark.js'
+import DatasetBenchmarkDashboard from './components/DatasetBenchmarkDashboard'
+import { generateModelLeaderboard } from './evaluation/modelLeaderboard.js'
+import ModelLeaderboard from './components/ModelLeaderBoard.jsx'
 
 const YOLO_MODEL_ID = 'onnx-community/yolov10s'
 const IOU_THRESHOLD = 0.5
@@ -418,6 +426,17 @@ function App() {
     setDatasetReport(null)
     setDatasetError('')
   }
+  function handleConditionChange(id, condition) {
+  setDatasetImages(previous =>
+    previous.map(image =>
+      image.id === id
+        ? { ...image, condition }
+        : image
+    )
+  )
+
+  setDatasetReport(null)
+}
 
   function handleRemoveImage(id) {
     const removed = datasetImages.find(image => image.id === id)
@@ -987,14 +1006,16 @@ function App() {
         })
 
         const result = {
-          id: item.id,
-          name: item.name,
-          groundTruth: item.groundTruth || [],
-          yoloPredictions: [],
-          cocoPredictions: [],
-          yolo: yoloDetector ? null : { error: yoloLoadError },
-          coco: cocoModel ? null : { error: cocoLoadError }
-        }
+  id: item.id,
+  name: item.name,
+  previewUrl: item.previewUrl,
+  groundTruth: item.groundTruth || [],
+  condition: item.condition || 'normal',
+  yoloPredictions: [],
+  cocoPredictions: [],
+  yolo: yoloDetector ? null : { error: yoloLoadError },
+  coco: cocoModel ? null : { error: cocoLoadError }
+}
 
         if (yoloDetector) {
           try {
@@ -1108,10 +1129,22 @@ function App() {
           yolo: meanTime('yolo'),
           coco: meanTime('coco')
         },
-        evaluation: {
+                evaluation: {
           yolo: evaluateModelDataset(yoloEvaluationImages),
           coco: evaluateModelDataset(cocoEvaluationImages)
         },
+        crossModelVerification: analyzeCrossModelDataset(imageResults),
+        modelLeaderboard: generateModelLeaderboard({
+  evaluation: {
+    yolo: evaluateModelDataset(yoloEvaluationImages),
+    coco: evaluateModelDataset(cocoEvaluationImages)
+  },
+  speed: {
+    yolo: meanTime('yolo'),
+    coco: meanTime('coco')
+  }
+}),
+        conditionsAnalysis: analyzeConditionPerformance(imageResults),
         imageResults
       }
 
@@ -2238,10 +2271,11 @@ function App() {
 
           <div className={datasetBusy ? 'pointer-events-none mt-6 opacity-50' : 'mt-6'}>
             <DatasetPreview
-              images={datasetImages}
-              onRemove={handleRemoveImage}
-              onClear={handleClearDataset}
-            />
+            images={datasetImages}
+            onRemove={handleRemoveImage}
+            onClear={handleClearDataset}
+            onConditionChange={handleConditionChange}
+/>
           </div>
 
           {datasetImages.length > 0 && (
@@ -2263,6 +2297,10 @@ function App() {
           {datasetReport && (
             <div className="mt-6 space-y-4">
               <DatasetEvaluationDashboard report={datasetReport} />
+              <CrossModelDashboard report={datasetReport} />
+              <ConditionsAnalysisDashboard report={datasetReport} />
+              <DatasetBenchmarkDashboard report={datasetReport} />
+              <ModelLeaderBoard report={datasetReport} />
               <div className="grid gap-3 sm:grid-cols-2">
                 <button type="button" onClick={() => exportDatasetJSON(datasetReport)} className="rounded-xl border border-slate-700 py-3 font-semibold hover:border-violet-300">↓ Export dataset JSON report</button>
                 <button type="button" onClick={() => exportDatasetCSV(datasetReport)} className="rounded-xl border border-slate-700 py-3 font-semibold hover:border-violet-300">↓ Export dataset CSV report</button>
