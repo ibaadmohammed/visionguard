@@ -1,9 +1,19 @@
 
+
 export default function DatasetPreview({
   images = [],
   onRemove,
-  onClear
+  onClear,
+  onConditionChange
 }) {
+  const conditions = [
+    { value: 'normal', label: 'Normal' },
+    { value: 'low_light', label: 'Low light' },
+    { value: 'blur', label: 'Blurry' },
+    { value: 'occlusion', label: 'Partially occluded' },
+    { value: 'crowded', label: 'Crowded scene' }
+  ]
+
   if (images.length === 0) {
     return (
       <section className="rounded-2xl border border-white/10 bg-slate-900 p-6">
@@ -68,7 +78,7 @@ export default function DatasetPreview({
               </button>
             </div>
 
-            <div className="space-y-1 p-3">
+            <div className="space-y-3 p-3">
               <p
                 className="truncate text-sm font-medium text-white"
                 title={image.name}
@@ -85,8 +95,33 @@ export default function DatasetPreview({
               </p>
 
               <p className={`text-xs font-medium ${Array.isArray(image.groundTruth) ? 'text-emerald-300' : 'text-amber-300'}`}>
-                {Array.isArray(image.groundTruth) ? `${image.groundTruth.length} ground-truth box(es)` : 'Annotations missing'}
+                {Array.isArray(image.groundTruth)
+                  ? `${image.groundTruth.length} ground-truth box(es)`
+                  : 'Annotations missing'}
               </p>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-300">
+                  Image condition
+                </label>
+
+                <select
+                  value={image.condition || 'normal'}
+                  onChange={event =>
+                    onConditionChange?.(image.id, event.target.value)
+                  }
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 p-2 text-sm text-white"
+                >
+                  {conditions.map(condition => (
+                    <option
+                      key={condition.value}
+                      value={condition.value}
+                    >
+                      {condition.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </article>
         ))}
