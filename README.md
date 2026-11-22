@@ -1,267 +1,258 @@
+# VisionGuard – AI-Powered Object Detection & Evaluation Platform
 
+VisionGuard is a full-stack computer vision platform designed to detect, analyze, track and evaluate objects in images, videos and live webcam streams.
 
-# VisionGuard 🛡️
+It integrates multiple object detection models, advanced evaluation metrics, dataset benchmarking and cross-model verification to provide a comprehensive environment for computer vision experimentation.
 
-### AI-Powered Multi-Model Object Detection & Benchmarking Platform
+## 🚀 Key Features
 
-VisionGuard is a browser-based computer vision application that uses multiple deep learning models to detect and analyze objects in images. It combines YOLOv10s and TensorFlow.js COCO-SSD to provide an interactive object detection experience with confidence filtering, visual annotations, detection analytics, and model benchmarking.
-
-# VisionGuard
-
-A browser-based multi-model computer-vision laboratory built with React and Vite. VisionGuard supports YOLOv10s and COCO-SSD object detection, single-image benchmarking, manual ground-truth annotation, and dataset-level model evaluation.
-e58be05 (Document Phase 4 dataset evaluation features)
-
-The project aims to explore modern computer vision techniques, multi-model inference, and quantitative evaluation through a practical React application.
-
----
-
-## ✨ Features
-
-### 🤖 Multi-Model Object Detection
-
-- **YOLOv10s:** Advanced object detection using Hugging Face Transformers.js.
-- **COCO-SSD:** Real-time-capable object detection using TensorFlow.js.
-- Switch between detection engines.
-- Lazy-load models when needed.
-- WebGPU acceleration with WASM fallback for YOLO inference, where supported.
-- WebGL or CPU backend fallback for COCO-SSD.
-
-### 📊 Advanced Detection Analytics
-
-- Adjustable confidence threshold.
-- Object class filtering.
-- Detected object counts.
-- Inference time measurement.
+### 1. AI Object Detection
+- YOLOv10s object detection using Hugging Face Transformers.js.
+- COCO-SSD object detection using TensorFlow.js.
+- WebGPU acceleration with WASM fallback for YOLO.
+- WebGL/CPU fallback for COCO-SSD.
+- Adjustable confidence thresholds.
+- Class-based detection filtering.
 - Bounding-box visualization.
-- Organized detection results.
+- Detection counts and inference-time measurements.
 
-### 🎯 Annotation & Model Benchmarking
+### 2. Image & Video Processing
+- Upload and analyze images.
+- Real-time webcam object detection.
+- Video upload and frame-by-frame analysis.
+- Configurable frame sampling.
+- Live FPS and inference-time monitoring.
+- Export annotated images as PNG.
+- Export detection reports as JSON.
 
-- Draw ground-truth bounding boxes.
-- Assign class labels to annotated objects.
-- Compare detection models against manually annotated ground truth.
-- Evaluate model predictions using benchmark metrics.
-- Export benchmark results for further analysis.
+### 3. Object Tracking & Smart Zones
+- Object tracking with stable tracking IDs.
+- IoU and center-distance-based matching.
+- Track path visualization.
+- Missed-frame management.
+- Smart zone entry and exit detection.
+- Occupancy monitoring.
+- Class distribution analytics.
+- Event history and analytics exports.
 
-### 📥 Export & Reporting
+### 4. Advanced AI Model Evaluation
 
-- Download annotated detection images as PNG.
-- Export detection reports in JSON format.
-- Export benchmark results for analysis.
+VisionGuard includes an advanced evaluation framework for measuring and comparing object detection performance.
 
----
+**Evaluation metrics:**
+- Precision
+- Recall
+- F1-score
+- Intersection over Union (IoU)
+- Average Precision (AP)
+- Mean Average Precision (mAP@0.5)
+- mAP@0.5:0.95
 
-## 🧰 Tech Stack
+**Advanced evaluation capabilities:**
+- Confidence threshold optimization.
+- Precision-focused and recall-focused recommendations.
+- False-positive and false-negative analysis.
+- Localization and classification error analysis.
+- Cross-model verification between YOLOv10s and COCO-SSD.
+- Difficult-condition evaluation.
+- Dataset-level benchmarking.
+- AI model performance leaderboard.
 
-| Technology                   | Purpose                           |
-| ---------------------------- | --------------------------------- |
-| React                        | Frontend application              |
-| Vite                         | Development server and build tool |
-| JavaScript                   | Application logic                 |
-| Tailwind CSS                 | User interface styling            |
-| TensorFlow.js                | Browser-based machine learning    |
-| COCO-SSD                     | Object detection model            |
-| Hugging Face Transformers.js | Model inference                   |
-| YOLOv10s                     | Advanced object detection         |
-| ONNX Runtime                 | Model execution backend           |
+**Difficult testing conditions:**
+- Low-light images
+- Blurred images
+- Occluded objects
+- Crowded scenes
+- Normal conditions
 
----
+### 5. Backend & Database
 
-## 🧠 Detection Models
+VisionGuard includes an Express.js backend connected to PostgreSQL.
 
-### 1. YOLOv10s
+- User registration and login.
+- JWT-based authentication.
+- Password hashing using bcrypt.
+- Protected API endpoints.
+- Project and workspace management.
+- Dataset management.
+- Detection session history.
+- Detection result storage.
+- Image upload handling.
+- File validation and metadata storage.
+- API rate limiting.
+- HTTP security headers.
 
-Uses the `onnx-community/yolov10s` model through Hugging Face Transformers.js.
+### 6. Reports & Analytics
+- Dataset evaluation dashboards.
+- Cross-model comparison dashboards.
+- Detection error inspection.
+- Dataset benchmarking dashboards.
+- Model performance leaderboard.
+- JSON and CSV exports.
+- Annotated image downloads.
 
-Designed for advanced object detection with browser-based inference.
+## 🛠️ Technology Stack
 
-### 2. COCO-SSD MobileNet V2
+| Category | Technologies |
+|---|---|
+| Frontend | React.js, Vite |
+| Styling | Tailwind CSS |
+| Computer Vision | YOLOv10s, COCO-SSD |
+| Machine Learning | Hugging Face Transformers.js, TensorFlow.js |
+| Backend | Node.js, Express.js |
+| Database | PostgreSQL |
+| Authentication | JWT, bcryptjs |
+| File Uploads | Multer, file-type |
+| Image Processing | HTML Canvas |
+| Version Control | Git, GitHub |
+| Deployment | Vercel (frontend) |
 
-Uses TensorFlow.js and the COCO-SSD model.
-
-Provides a second detection engine for comparing model outputs.
-
-Both models have different architectures and performance characteristics. Actual detection quality depends on image quality, object size, lighting, occlusion, and confidence settings.
-
----
-
-## 🏗️ Project Structure
+## 🏗️ Project Architecture
 
 ```text
 VisionGuard/
 │
-├── public/
-│
 ├── src/
-│   ├── App.jsx
-│   ├── main.jsx
-│   └── index.css
+│   ├── components/
+│   │   ├── DatasetEvaluationDashboard.jsx
+│   │   ├── CrossModelDashboard.jsx
+│   │   ├── ConditionsAnalysisDashboard.jsx
+│   │   ├── DatasetBenchmarkDashboard.jsx
+│   │   ├── DetectionErrorInspector.jsx
+│   │   ├── ModelLeaderBoard.jsx
+│   │   ├── DatasetPreview.jsx
+│   │   ├── LiveDetection.jsx
+│   │   ├── VideoDetection.jsx
+│   │   └── TrackingAnalytics.jsx
+│   │
+│   ├── evaluation/
+│   │   ├── averagePrecision.js
+│   │   ├── precisionRecall.js
+│   │   ├── mapEvaluation.js
+│   │   ├── matching.js
+│   │   ├── iou.js
+│   │   ├── confidenceAnalysis.js
+│   │   ├── errorAnalysis.js
+│   │   ├── crossModelVerification.js
+│   │   ├── conditionAnalysis.js
+│   │   ├── datasetBenchmark.js
+│   │   ├── modelLeaderboard.js
+│   │   └── datasetEvaluator.js
+│   │
+│   └── App.jsx
 │
-├── index.html
+├── server/
+│   ├── routes/
+│   ├── controllers/
+│   ├── middleware/
+│   └── database/
+│
+├── public/
 ├── package.json
-├── package-lock.json
-├── vite.config.js
-├── postcss.config.js
 └── README.md
 ```
 
----
+*The architecture above highlights the main application areas; additional project files and backend modules may exist.*
 
-## 🚀 Getting Started
+## ⚙️ Installation & Setup
 
 ### Prerequisites
-
-- Node.js (LTS recommended)
+- Node.js
 - npm
-- A modern web browser
+- PostgreSQL
+- Git
 
 ### 1. Clone the repository
 
 ```bash
 git clone https://github.com/ibaadmohammed/visionguard.git
-```
-
-### 2. Navigate into the project
-
-```bash
 cd visionguard
 ```
 
-### 3. Install dependencies
+### 2. Install frontend dependencies
 
 ```bash
 npm install
 ```
 
-### 4. Start the development server
+### 3. Start the frontend
 
 ```bash
 npm run dev
 ```
 
-<<<<<<< HEAD
+Vite will display the local development URL in your terminal.
+
+### 4. Set up the backend
+
+```bash
+cd server
+npm install
+```
+
+Configure the backend environment variables according to the server configuration. These include the PostgreSQL connection settings, JWT secret and server port.
+
+Create the PostgreSQL database and configure the required schema before starting the backend.
+
+Start the backend using the development script configured in `server/package.json`.
 
 ### 5. Build for production
 
-Open the local URL printed by Vite. Model weights are downloaded on first use, so an internet connection is required.
-
-## Phase 4: Dataset evaluation
-
-1. Open **Dataset evaluation** and upload JPG, PNG, or WebP images (up to 100 images; 20 MB per image).
-2. Import matching ground-truth annotations:
-   - **COCO JSON:** select an instances JSON file containing `images`, `annotations`, and `categories`. Image filenames are matched by basename. COCO pixel `xywh` boxes are scaled to the uploaded image dimensions when necessary.
-   - **YOLO TXT:** select one `.txt` label file per image. Each row must use `class_id x_center y_center width height` with normalized coordinates. Paste class names in class-ID order; if omitted, labels are named `class_0`, `class_1`, etc.
-3. Check the annotation status shown under each dataset image. Every image must have a matching annotation record/file. A matched image with an empty annotation list is treated as a valid negative image.
-4. Run **YOLOv10s + COCO-SSD Dataset Evaluation**. Both models process each image independently. A model failure on one image is recorded and does not stop the rest of the dataset.
-5. Review the dashboard and export JSON or CSV reports.
-
-### Evaluation definitions
-
-- Bounding boxes use `[x, y, width, height]` in original image pixels.
-- TP, FP, FN, precision, recall and F1 use class-aware one-to-one matching at IoU 0.50.
-- AP uses 101-point interpolated precision-recall. mAP@50 averages AP at IoU 0.50 across classes with ground-truth instances.
-- mAP@50:95 averages AP at IoU thresholds 0.50, 0.55, …, 0.95.
-- Predictions are evaluated at a low fixed confidence threshold (0.001) so the single-image confidence slider does not silently alter dataset metrics.
-- Class names must be consistent between the annotations and the model labels. Metrics are only as reliable as the supplied ground truth.
-
-## Production build
-
-e58be05 (Document Phase 4 dataset evaluation features)
+From the project root:
 
 ```bash
 npm run build
 ```
 
-Vite generates the production build inside the `dist/` directory.
+The production build is generated in the `dist/` directory.
 
-## <<<<<<< HEAD
+## 📊 Model Comparison
 
-## 📖 How It Works
+VisionGuard supports two object detection models:
 
-1. Upload an image into VisionGuard.
-2. Select the preferred detection model.
-3. Load the model and run inference.
-4. View detected objects and bounding boxes.
-5. Adjust confidence thresholds and class filters.
-6. Analyze detection counts and inference performance.
-7. Create ground-truth annotations for benchmarking.
-8. Export detection results and reports.
+| Feature | YOLOv10s | COCO-SSD |
+|---|---|---|
+| Detection | Yes | Yes |
+| Image inference | Yes | Yes |
+| Webcam detection | Yes | Yes |
+| Video analysis | Yes | Yes |
+| Confidence filtering | Yes | Yes |
+| Dataset evaluation | Yes | Yes |
+| Performance comparison | Yes | Yes |
 
----
-
-## 🗺️ Development Roadmap
-
-| Phase    | Milestone                                | Status         |
-| -------- | ---------------------------------------- | -------------- |
-| Phase 1  | Core Object Detection & Analytics        | ✅ Implemented |
-| Phase 2  | YOLOv10s Detection Engine                | ✅ Implemented |
-| Phase 2B | Multi-Model Detection                    | ✅ Implemented |
-| Phase 3  | Advanced Detection Analytics             | ✅ Implemented |
-| Phase 3B | Ground-Truth Annotation & Benchmarking   | ✅ Implemented |
-| Phase 4  | Dataset-Based Evaluation                 | 🔜 Planned     |
-| Phase 5  | Custom Object Detection & Model Training | 🔜 Planned     |
-| Phase 6  | Real-Time Webcam Detection               | 🔜 Planned     |
-| Phase 7  | Production-Ready VisionGuard Dashboard   | 🔜 Planned     |
-
----
-
-## 🔬 Future Improvements
-
-- Dataset-level model evaluation.
-- Precision, recall, F1-score, and mAP evaluation.
-- Custom dataset support.
-- Custom object detection models.
-- Real-time webcam inference.
-- Performance optimization and model caching.
-- Advanced visualization and analytics dashboard.
-
----
+Model performance depends on the dataset, hardware, confidence threshold and testing conditions.
 
 ## 🎯 Project Objectives
 
-VisionGuard is being developed to explore:
+- Build a browser-based computer vision platform.
+- Compare different object detection architectures.
+- Evaluate detection accuracy using established metrics.
+- Identify false positives, false negatives and localization errors.
+- Analyze model performance under difficult environmental conditions.
+- Provide dataset-level evaluation and benchmarking.
+- Integrate AI capabilities with a secure full-stack backend.
 
-- Deep learning and computer vision.
-- Object detection architectures.
-- Multi-model inference.
-- Browser-based machine learning.
-- Model performance benchmarking.
-- Frontend integration with AI/ML systems.
+## 🔮 Future Enhancements
 
----
+- Complete frontend authentication integration.
+- Protected user dashboards.
+- Persistent detection history.
+- Project and dataset management interface.
+- Cloud-based deployment and storage.
+- Additional object detection models.
+- Advanced visualization and analytics.
+- Automated evaluation pipelines.
 
-## 🤝 Contributing
-
-Contributions, suggestions, and improvements are welcome!
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Implement your changes.
-4. Commit your changes.
-5. Open a Pull Request.
-
----
-
-## 👨‍💻 Author
+## 👨‍💻 Developer
 
 **Mohammed Mohtashim Ibaad**
 
-IT Student | Software Developer | AI & ML Enthusiast
-
 - GitHub: [@ibaadmohammed](https://github.com/ibaadmohammed)
-- Project Repository: [VisionGuard](https://github.com/ibaadmohammed/visionguard)
-
----
+- Project: [VisionGuard](https://github.com/ibaadmohammed/visionguard)
 
 ## 📄 License
 
-This project is currently under development. A license has not yet been specified.
-
----
-
-<p align="center">
-  <b>VisionGuard — Making Computer Vision More Accessible Through AI.</b>
-</p>
+This project is intended for educational, research and development purposes. Add an appropriate open-source license to the repository before distributing it under specific reuse permissions.
 
 1. Push the project to GitHub.
 2. Import the repository into Vercel.
