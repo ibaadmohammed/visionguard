@@ -2,11 +2,19 @@
 import { calculateIoU, isValidBoundingBox } from './iou.js'
 
 export function matchDetections(
-  predictions,
-  groundTruth,
+  predictions = [],
+  groundTruth = [],
   iouThreshold = 0.5
 ) {
-  const validPredictions = predictions
+  const safePredictions = Array.isArray(predictions)
+    ? predictions
+    : []
+
+  const safeGroundTruth = Array.isArray(groundTruth)
+    ? groundTruth
+    : []
+
+  const validPredictions = safePredictions
     .filter(
       (prediction) =>
         prediction &&
@@ -22,12 +30,17 @@ export function matchDetections(
     }))
     .sort((a, b) => b.score - a.score)
 
-  const validGroundTruth = groundTruth.filter(
-    (item) =>
-      item &&
-      typeof item.class === 'string' &&
-      isValidBoundingBox(item.bbox)
-  )
+  const validGroundTruth = safeGroundTruth
+    .filter(
+      (item) =>
+        item &&
+        typeof item.class === 'string' &&
+        isValidBoundingBox(item.bbox)
+    )
+    .map((item, index) => ({
+      ...item,
+      originalIndex: index
+    }))
 
   const matchedGroundTruth = new Set()
 
@@ -57,9 +70,46 @@ export function matchDetections(
         ...prediction,
         truePositive: 1,
         falsePositive: 0,
-        matchedGroundTruth: bestMatch,
-        iou: bestIoU
+        matchedGroundTruth: validGroundTruth[bestMatch].originalIndex,
+        iou: bestIoU,
+        errorType: null
       }
+    }
+
+    const sameClassGroundTruth = validGroundTruth
+      .map((truth) => ({
+        truth,
+        iou: calculateIoU(prediction.bbox, truth.bbox)
+      }))
+      .filter(({ truth }) => truth.class === prediction.class)
+
+    const wrongClassGroundTruth = validGroundTruth
+      .map((truth) => ({
+        truth,
+        iou: calculateIoU(prediction.bbox, truth.bbox)
+      }))
+      .filter(({ truth }) => truth.class !== prediction.class)
+
+    const bestSameClassIoU = Math.max(
+      0,
+      ...sameClassGroundTruth.map((item) => item.iou)
+    )
+
+    const bestWrongClass = wrongClassGroundTruth.reduce(
+      (best, current) =>
+        current.iou > best.iou ? current : best,
+      { truth: null, iou: 0 }
+    )
+
+    let errorType = 'background_false_positive'
+
+    if (bestSameClassIoU > 0 && bestSameClassIoU < iouThreshold) {
+      errorType = 'localization_error'
+    } else if (
+      bestWrongClass.truth &&
+      bestWrongClass.iou >= iouThreshold
+    ) {
+      errorType = 'classification_error'
     }
 
     return {
@@ -67,18 +117,40 @@ export function matchDetections(
       truePositive: 0,
       falsePositive: 1,
       matchedGroundTruth: null,
-      iou: 0
+      iou: Math.max(bestSameClassIoU, bestWrongClass.iou),
+      errorType
     }
   })
 
+  const falseNegatives = validGroundTruth
+    .map((truth, index) => ({
+      ...truth,
+      originalIndex: truth.originalIndex,
+      groundTruthIndex: index
+    }))
+    .filter((truth) => !matchedGroundTruth.has(truth.groundTruthIndex))
+    .map((truth) => ({
+      ...truth,
+      falseNegative: 1,
+      errorType: 'missed_detection'
+    }))
+
+  const truePositiveResults = results.filter(
+    (item) => item.truePositive === 1
+  )
+
+  const falsePositiveResults = results.filter(
+    (item) => item.falsePositive === 1
+  )
+
   return {
     results,
-    truePositives: matchedGroundTruth.size,
-    falsePositives: results.filter(
-      (item) => item.falsePositive === 1
-    ).length,
-    falseNegatives:
-      validGroundTruth.length - matchedGroundTruth.size,
+    truePositiveResults,
+    falsePositiveResults,
+    falseNegativeResults: falseNegatives,
+    truePositives: truePositiveResults.length,
+    falsePositives: falsePositiveResults.length,
+    falseNegatives: falseNegatives.length,
     totalGroundTruth: validGroundTruth.length
   }
 }
