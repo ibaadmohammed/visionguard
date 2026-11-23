@@ -220,4 +220,115 @@ Configure the required PostgreSQL connection details, authentication secrets and
 
 **Important:** Never commit your actual `.env` file or database credentials to GitHub.
 
-### 5. Configure Postgre
+### 5. Configure PostgreSQL
+
+Create a PostgreSQL database named:
+
+```sql
+CREATE DATABASE visionguard;
+```
+
+Execute the SQL schema and migration files in the appropriate order:
+
+```text
+server/sql/schema.sql
+server/sql/phase6e_uploads.sql
+```
+
+Ensure the backend database connection points to your PostgreSQL database.
+
+### 6. Start the backend
+
+From the `server` directory:
+
+```bash
+npm run dev
+```
+
+The backend is configured to run on:
+
+```text
+http://localhost:5000
+```
+
+### 7. Start the frontend
+
+Open another terminal in the project root:
+
+```bash
+npm run dev
+```
+
+The Vite development server is available at:
+
+```text
+http://localhost:5173
+```
+
+Open the frontend in your browser and register or log in to access the VisionGuard workspace.
+
+---
+
+## Application Workspaces
+
+| Workspace | Purpose |
+|---|---|
+| Detection Lab | Image, webcam and video detection |
+| Projects | Project organization |
+| Datasets | Dataset management |
+| Files | Uploaded image management |
+| Dashboard | User analytics and statistics |
+
+## API Overview
+
+The backend exposes REST API endpoints for the application's core functionality.
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/auth` | Authentication |
+| `/api/projects` | Project management |
+| `/api/datasets` | Dataset management |
+| `/api/uploads` | File upload management |
+| `/api/detections` | Detection history |
+| `/api/dashboard` | Dashboard analytics |
+
+Protected endpoints require valid authentication.
+
+## Deployment
+
+VisionGuard uses separate frontend and backend deployments.
+
+- **Frontend:** Vercel
+- **Backend:** Render
+- **Database:** PostgreSQL
+
+Live application:
+
+https://visionguard-six.vercel.app/
+
+Repository:
+
+https://github.com/ibaadmohammed/visionguard
+
+## Future Enhancements
+
+- Advanced detection visualization and analytics.
+- More object detection model integrations.
+- Improved model benchmarking and comparison.
+- Dataset annotation and preprocessing tools.
+- Exportable evaluation reports.
+- Enhanced security and automated testing.
+- Docker-based development and deployment.
+- Advanced user and project management.
+
+## Author
+
+**Mohammed Mohtashim Ibaad**
+
+- GitHub: [@ibaadmohammed](https://github.com/ibaadmohammed)
+
+---
+
+<p align="center">
+  <strong>VisionGuard — Explore. Detect. Evaluate. Analyze.</strong>
+</p>
