@@ -3,17 +3,19 @@
 import { useEffect, useRef, useState } from 'react'
 import * as cocoSsd from '@tensorflow-models/coco-ssd'
 import * as tf from '@tensorflow/tfjs'
-import { pipeline } from '@huggingface/transformers'
+import {
+  detectWithYolo,
+  loadYoloModel
+} from '../utils/services/yolo.js'
 import TrackingAnalytics from './TrackingAnalytics'
 
-const YOLO_MODEL_ID = 'onnx-community/yolov10s'
+
 
 export default function VideoDetection() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const fileInputRef = useRef(null)
   const videoUrlRef = useRef(null)
-  const yoloRef = useRef(null)
   const cocoRef = useRef(null)
   const stopRef = useRef(false)
 
@@ -79,41 +81,17 @@ export default function VideoDetection() {
   }
 
   async function loadYolo() {
-    if (yoloRef.current) return yoloRef.current
+  setStatus('Loading YOLOv10s...')
 
-    setStatus('Loading YOLOv10s...')
-
-    let detector
-
-    try {
-      if (navigator.gpu) {
-        try {
-          detector = await pipeline(
-            'object-detection',
-            YOLO_MODEL_ID,
-            { device: 'webgpu' }
-          )
-        } catch (err) {
-          console.warn('WebGPU unavailable. Falling back to WASM.', err)
-        }
-      }
-
-      if (!detector) {
-        detector = await pipeline(
-          'object-detection',
-          YOLO_MODEL_ID,
-          { device: 'wasm' }
-        )
-      }
-
-      yoloRef.current = detector
-      return detector
-    } catch (err) {
-      throw new Error(
-        `YOLOv10s failed to load: ${err?.message || 'Unknown error'}`
-      )
-    }
+  try {
+    await loadYoloModel()
+    return true
+  } catch (err) {
+    throw new Error(
+      `YOLOv10s failed to load: ${err?.message || 'Unknown error'}`
+    )
   }
+}
 
   async function loadCoco() {
     if (cocoRef.current) return cocoRef.current
@@ -142,47 +120,16 @@ export default function VideoDetection() {
     }
   }
 
-  function normalizeYolo(results) {
-    return results.map(item => {
-      const box = item.box || {}
-      const xmin = Number(box.xmin)
-      const ymin = Number(box.ymin)
-      const xmax = Number(box.xmax)
-      const ymax = Number(box.ymax)
-
-      return {
-        class: String(item.label || '').trim().toLowerCase(),
-        score: Number(item.score),
-        bbox: [
-          xmin,
-          ymin,
-          xmax - xmin,
-          ymax - ymin
-        ]
-      }
-    }).filter(item =>
-      item.class &&
-      Number.isFinite(item.score) &&
-      item.bbox.every(Number.isFinite) &&
-      item.bbox[2] > 0 &&
-      item.bbox[3] > 0
-    )
-  }
+ 
 
   async function detectFrame(video) {
     const confidence = threshold / 100
 
-    if (selectedModel === 'yolo') {
-      const model = await loadYolo()
+   if (selectedModel === 'yolo') {
+  await loadYolo()
 
-      const predictions = await model(video, {
-        threshold: confidence,
-        percentage: false
-      })
-
-      return normalizeYolo(predictions)
-    }
-
+  return await detectWithYolo(video, confidence)
+}
     const model = await loadCoco()
 
     const predictions = await model.detect(

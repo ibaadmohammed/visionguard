@@ -21,7 +21,7 @@ export const saveUploadedImage = async (req, res, next) => {
 
     const { projectId, datasetId } = req.body
 
-    const validOptionalId = (value) =>
+    const validOptionalId = value =>
       value === undefined ||
       value === '' ||
       /^\d+$/.test(String(value))
@@ -40,9 +40,12 @@ export const saveUploadedImage = async (req, res, next) => {
     try {
       await client.query('BEGIN')
 
+      // VERIFY PROJECT OWNERSHIP
       if (projectId) {
         const project = await client.query(
-          'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
+          `SELECT id
+           FROM projects
+           WHERE id = $1 AND user_id = $2`,
           [projectId, req.user.id]
         )
 
@@ -57,13 +60,20 @@ export const saveUploadedImage = async (req, res, next) => {
         }
       }
 
+      // VERIFY DATASET OWNERSHIP AND PROJECT RELATIONSHIP
       if (datasetId) {
         const dataset = await client.query(
           `SELECT d.id
            FROM datasets d
            INNER JOIN projects p ON p.id = d.project_id
-           WHERE d.id = $1 AND p.user_id = $2`,
-          [datasetId, req.user.id]
+           WHERE d.id = $1
+             AND p.user_id = $2
+             AND ($3::INTEGER IS NULL OR d.project_id = $3)`,
+          [
+            datasetId,
+            req.user.id,
+            projectId || null
+          ]
         )
 
         if (dataset.rows.length === 0) {
@@ -77,6 +87,7 @@ export const saveUploadedImage = async (req, res, next) => {
         }
       }
 
+      // SAVE UPLOAD METADATA
       const result = await client.query(
         `INSERT INTO uploaded_files
          (user_id, project_id, dataset_id, original_name,
@@ -171,8 +182,10 @@ export const deleteUploadedFile = async (req, res, next) => {
       result.rows[0].stored_name
     )
 
-    await fs.unlink(filePath).catch((error) => {
-      if (error.code !== 'ENOENT') throw error
+    await fs.unlink(filePath).catch(error => {
+      if (error.code !== 'ENOENT') {
+        throw error
+      }
     })
 
     res.status(200).json({

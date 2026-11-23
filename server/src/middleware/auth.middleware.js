@@ -24,10 +24,11 @@ export const protect = (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
     req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      role: decoded.role
-    }
+  id: decoded.id,
+  full_name: decoded.full_name || '',
+  email: decoded.email,
+  role: decoded.role
+}
 
     next()
   } catch (error) {

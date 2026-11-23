@@ -2,7 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as cocoSsd from '@tensorflow-models/coco-ssd'
 import * as tf from '@tensorflow/tfjs'
-import { pipeline } from '@huggingface/transformers'
+import {
+  detectWithYolo,
+  loadYoloModel
+} from './utils/services/yolo.js'
 import DatasetUploader from './components/DatasetUploader.jsx'
 import DatasetPreview from './components/DatasetPreview.jsx'
 import AnnotationImporter from './components/AnnotationImporter.jsx'
@@ -19,30 +22,20 @@ import { analyzeDatasetBenchmark } from './evaluation/datasetBenchmark.js'
 import DatasetBenchmarkDashboard from './components/DatasetBenchmarkDashboard'
 import { generateModelLeaderboard } from './evaluation/modelLeaderboard.js'
 import ModelLeaderboard from './components/ModelLeaderBoard.jsx'
-
-const YOLO_MODEL_ID = 'onnx-community/yolov10s'
+import { useAuth } from './context/AuthContext.jsx'
+import AuthScreen from './components/auth/AuthScreen.jsx'
+import { detectionAPI } from './utils/services/api.js'
+import ProjectsWorkspace from './components/workspace/ProjectWorkspace.jsx'
+import DatasetsWorkspace from './components/workspace/DatasetsWorkspace.jsx'
+import FilesWorkspace from './components/workspace/FilesWorkspace.jsx'
+import DashboardWorkspace from './components/workspace/DashboardWorkspace.jsx'
 const IOU_THRESHOLD = 0.5
 
 // --------------------------------------------------
 // Detection helpers
 // --------------------------------------------------
 
-function normalizeYoloPredictions(predictions) {
-  return predictions.map(prediction => {
-    const box = prediction.box
 
-    return {
-      class: String(prediction.label).trim().toLowerCase(),
-      score: prediction.score,
-      bbox: [
-        box.xmin,
-        box.ymin,
-        box.xmax - box.xmin,
-        box.ymax - box.ymin
-      ]
-    }
-  })
-}
 
 function calculateIoU(a, b) {
   const [ax, ay, aw, ah] = a.bbox
@@ -248,6 +241,8 @@ function average(values) {
 // --------------------------------------------------
 
 function App() {
+  const { user, loading, logout } = useAuth()
+  const [activeWorkspace, setActiveWorkspace] = useState('detection')
   const [selectedModel, setSelectedModel] = useState('yolo')
   const [modelStatus, setModelStatus] = useState(
     'YOLOv10s will load on first run'
@@ -277,7 +272,10 @@ function App() {
   const [selectedClass, setSelectedClass] = useState('all')
   const [inferenceTime, setInferenceTime] = useState(null)
   const [activeModelName, setActiveModelName] = useState('')
-
+// Phase 8C — Detection history
+const [detectionHistory, setDetectionHistory] = useState([])
+const [historyLoading, setHistoryLoading] = useState(false)
+const [historyError, setHistoryError] = useState('')
   // Phase 3A
   const [benchmark, setBenchmark] = useState(null)
   const [benchmarkError, setBenchmarkError] = useState('')
@@ -295,58 +293,63 @@ function App() {
   const inputRef = useRef(null)
 
   const cocoModelRef = useRef(null)
-  const yoloDetectorRef = useRef(null)
-
   const cocoLoadingRef = useRef(null)
-  const yoloLoadingRef = useRef(null)
+  const yoloLoadedRef = useRef(false)
 
+// --------------------------------------------------
+// Phase 8C — Detection history
+// --------------------------------------------------
+
+async function loadDetectionHistory() {
+  setHistoryLoading(true)
+  setHistoryError('')
+
+  try {
+    const response = await detectionAPI.getAll()
+    setDetectionHistory(response.sessions || [])
+  } catch (error) {
+    setHistoryError(error.message || 'Failed to load detection history.')
+  } finally {
+    setHistoryLoading(false)
+  }
+}
+
+useEffect(() => {
+  loadDetectionHistory()
+}, [user])
+async function deleteDetectionHistory(id) {
+  try {
+    await detectionAPI.delete(id)
+    setDetectionHistory(previous =>
+      previous.filter(item => item.id !== id)
+    )
+  } catch (error) {
+    setHistoryError(error.message || 'Failed to delete detection record.')
+  }
+}
   // --------------------------------------------------
   // Model loading
   // --------------------------------------------------
 
   async function ensureYoloLoaded() {
-    if (yoloDetectorRef.current) return yoloDetectorRef.current
-    if (yoloLoadingRef.current) return yoloLoadingRef.current
+  if (yoloLoadedRef.current) return true
 
-    const loadingTask = (async () => {
-      setModelStatus('Downloading YOLOv10s model...')
+  setModelStatus('Loading YOLOv10s model...')
 
-      let detector
+  try {
+    await loadYoloModel()
 
-      if (navigator.gpu) {
-        try {
-          setModelStatus('Initializing YOLOv10s with WebGPU...')
+    yoloLoadedRef.current = true
+    setModelStatus('YOLOv10s ready')
 
-          detector = await pipeline(
-            'object-detection',
-            YOLO_MODEL_ID,
-            { device: 'webgpu' }
-          )
-        } catch (webgpuError) {
-          console.warn('WebGPU unavailable. Falling back to WASM:', webgpuError)
-        }
-      }
-
-      if (!detector) {
-        setModelStatus('Loading YOLOv10s with WASM...')
-
-        detector = await pipeline('object-detection', YOLO_MODEL_ID)
-      }
-
-      yoloDetectorRef.current = detector
-      setModelStatus('YOLOv10s ready')
-
-      return detector
-    })()
-
-    yoloLoadingRef.current = loadingTask
-
-    try {
-      return await loadingTask
-    } finally {
-      yoloLoadingRef.current = null
-    }
+    return true
+  } catch (error) {
+    yoloLoadedRef.current = false
+    throw error
   }
+}
+
+    
 
   async function ensureCocoLoaded() {
     if (cocoModelRef.current) return cocoModelRef.current
@@ -788,57 +791,93 @@ function App() {
   // Single-model detection
   // --------------------------------------------------
 
-  async function detect() {
-    if (!imageUrl || !imageReady || busy || datasetBusy) return
+  
+async function detect() {
+  if (!imageUrl || !imageReady || busy || datasetBusy) return
 
-    setBusy(true)
-    setError('')
-    setDetections([])
-    setInferenceTime(null)
+  setBusy(true)
+  setError('')
+  setDetections([])
+  setInferenceTime(null)
 
+  try {
+    let results = []
+    let elapsed = 0
+
+    const modelName =
+      selectedModel === 'yolo'
+        ? 'YOLOv10s'
+        : 'COCO-SSD MobileNet V2'
+if (selectedModel === 'yolo') {
+  await ensureYoloLoaded()
+
+  const start = performance.now()
+
+  results = await detectWithYolo(imageRef.current, 0.05)
+
+  elapsed = performance.now() - start
+
+  setActiveModelName(modelName)
+} else {
+      const model = await ensureCocoLoaded()
+      const start = performance.now()
+
+      results = await model.detect(imageRef.current, 100, 0.05)
+
+      elapsed = performance.now() - start
+      setActiveModelName(modelName)
+    }
+
+    setDetections(results)
+    setInferenceTime(elapsed)
+
+    console.log('Detection results:', results)
+    console.log('Inference time:', elapsed.toFixed(2), 'ms')
+
+    // SAVE DETECTION SESSION
     try {
-      let results = []
-      let elapsed = 0
+      const payload = {
+        modelName,
+        detectionType: 'image',
+        totalDetections: results.length,
+        inferenceTimeMs: elapsed,
+        detections: results.map(detection => {
+          const [x, y, width, height] = detection.bbox
 
-      if (selectedModel === 'yolo') {
-        const detector = await ensureYoloLoaded()
-        const start = performance.now()
-
-        const predictions = await detector(imageUrl, {
-          threshold: 0.05
+          return {
+            className: detection.class,
+            confidence: detection.score,
+            xMin: x,
+            yMin: y,
+            xMax: x + width,
+            yMax: y + height
+          }
         })
-
-        elapsed = performance.now() - start
-        results = normalizeYoloPredictions(predictions)
-
-        setActiveModelName('YOLOv10s')
-      } else {
-        const model = await ensureCocoLoaded()
-        const start = performance.now()
-
-        results = await model.detect(imageRef.current, 100, 0.05)
-
-        elapsed = performance.now() - start
-        setActiveModelName('COCO-SSD MobileNet V2')
       }
 
-      setDetections(results)
-      setInferenceTime(elapsed)
+      const response = await detectionAPI.create(payload)
 
-      console.log('Detection results:', results)
-      console.log('Inference time:', elapsed.toFixed(2), 'ms')
-    } catch (err) {
-      console.error('Detection error:', err)
+      console.log('Detection session saved:', response.session)
+    } catch (saveError) {
+      console.error('Failed to save detection history:', saveError)
 
       setError(
-        'Detection failed. Check your internet connection and browser console.'
+        'Detection completed, but saving to history failed. Please check your backend connection.'
       )
-
-      setModelStatus('Model inference failed')
-    } finally {
-      setBusy(false)
     }
+  } catch (err) {
+    console.error('Detection error:', err)
+
+    setError(
+      'Detection failed. Check your internet connection and browser console.'
+    )
+
+    setModelStatus('Model inference failed')
+  } finally {
+    setBusy(false)
   }
+}
+
 
   // --------------------------------------------------
   // Phase 3A — Dual-model benchmark
@@ -854,13 +893,13 @@ function App() {
     setError('')
     setModelStatus('Preparing both models...')
 
-    try {
-      const yoloDetector = await ensureYoloLoaded()
+        try {
+      await ensureYoloLoaded()
       const cocoModel = await ensureCocoLoaded()
 
       setModelStatus('Warming up both models...')
 
-      await yoloDetector(imageUrl, { threshold: 0.05 })
+      await detectWithYolo(imageRef.current, 0.05)
       await cocoModel.detect(imageRef.current, 100, 0.05)
 
       const RUNS = 3
@@ -875,12 +914,13 @@ function App() {
       for (let i = 0; i < RUNS; i++) {
         const start = performance.now()
 
-        const predictions = await yoloDetector(imageUrl, {
-          threshold: 0.05
-        })
+        const predictions = await detectWithYolo(
+          imageRef.current,
+          0.05
+        )
 
         yoloTimes.push(performance.now() - start)
-        yoloResults = normalizeYoloPredictions(predictions)
+        yoloResults = predictions
       }
 
       setModelStatus('Benchmarking COCO-SSD...')
@@ -897,7 +937,6 @@ function App() {
         cocoTimes.push(performance.now() - start)
         cocoResults = predictions
       }
-
       const result = {
         runs: RUNS,
 
@@ -964,7 +1003,7 @@ function App() {
     })
 
     const imageResults = []
-    let yoloDetector = null
+    let yoloReady = false
     let cocoModel = null
     let yoloLoadError = ''
     let cocoLoadError = ''
@@ -978,8 +1017,8 @@ function App() {
       ])
 
       if (yoloLoad.status === 'fulfilled') {
-        yoloDetector = yoloLoad.value
-      } else {
+  yoloReady = true
+      }else {
         yoloLoadError = yoloLoad.reason?.message || 'YOLOv10s failed to load'
         console.error('YOLOv10s model loading failed:', yoloLoad.reason)
       }
@@ -991,7 +1030,7 @@ function App() {
         console.error('COCO-SSD model loading failed:', cocoLoad.reason)
       }
 
-      if (!yoloDetector && !cocoModel) {
+      if (!yoloReady && !cocoModel) {
         throw new Error(
           `Both models failed to load. YOLOv10s: ${yoloLoadError}. COCO-SSD: ${cocoLoadError}`
         )
@@ -1013,18 +1052,19 @@ function App() {
   condition: item.condition || 'normal',
   yoloPredictions: [],
   cocoPredictions: [],
-  yolo: yoloDetector ? null : { error: yoloLoadError },
+  yolo: yoloReady ? null : { error: yoloLoadError },
   coco: cocoModel ? null : { error: cocoLoadError }
 }
 
-        if (yoloDetector) {
+        if (yoloReady) {
           try {
             const start = performance.now()
-            const predictions = await yoloDetector(item.previewUrl, {
-              threshold: 0.001
-            })
+            const predictions = await detectWithYolo(
+  item.previewUrl,
+  0.001
+)
             const inferenceMs = performance.now() - start
-            result.yoloPredictions = normalizeYoloPredictions(predictions)
+            result.yoloPredictions = predictions
             result.yolo = {
               inferenceMs,
               detections: result.yoloPredictions.length
@@ -1436,32 +1476,98 @@ function App() {
       </div>
     )
   }
+  // --------------------------------------------------
+  // AUTHENTICATION GATE
+  // --------------------------------------------------
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-orange-400" />
+          <p className="mt-4 text-sm text-slate-400">
+            Restoring your VisionGuard session...
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <AuthScreen />
+  }
 
   // --------------------------------------------------
   // UI
   // --------------------------------------------------
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-slate-950 text-white"> 
+{/* Header */}
+<header className="border-b border-slate-800 bg-slate-950">
+  <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-4">
+    <a className="flex items-center gap-3 text-xl font-bold">
+      <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-400 text-slate-950">
+        V
+      </span>
+      Vision<span className="text-orange-400">Guard</span>
+    </a>
 
-      {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-950">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4">
-          <a className="flex items-center gap-3 text-xl font-bold">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-orange-400 text-slate-950">
-              V
-            </span>
-            Vision<span className="text-orange-400">Guard</span>
-          </a>
+    <div className="flex flex-wrap items-center justify-end gap-3">
+      <span className="hidden rounded-full bg-orange-400/10 px-3 py-1.5 text-center text-xs text-orange-300 sm:inline-block">
+        MULTI-MODEL COMPUTER VISION LAB
+      </span>
 
-          <span className="rounded-full bg-orange-400/10 px-3 py-1.5 text-center text-xs text-orange-300">
-            MULTI-MODEL COMPUTER VISION LAB
-          </span>
-        </div>
-      </header>
+      <div className="text-right">
+        <p className="text-sm font-semibold text-white">
+          {user.full_name}
+        </p>
+        <p className="text-xs text-slate-500">
+          {user.email}
+        </p>
+      </div>
 
-      <div className="mx-auto max-w-7xl px-5 py-9">
+      <button
+        type="button"
+        onClick={logout}
+        className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-rose-400 hover:text-rose-300"
+      >
+        Logout
+      </button>
+    </div>
+  </div>
+</header>
+      {/* Workspace navigation */}
+<nav className="border-b border-slate-800 bg-slate-900/60">
+  <div className="mx-auto flex max-w-7xl flex-wrap gap-2 px-5 py-3">
+    {[
+      { id: 'detection', label: 'Detection Lab' },
+      { id: 'projects', label: 'Projects' },
+      { id: 'datasets', label: 'Datasets' },
+      { id: 'files', label: 'Files' },
+      { id: 'dashboard', label: 'Dashboard' }
+    ].map(tab => (
+      <button
+        key={tab.id}
+        type="button"
+        onClick={() => setActiveWorkspace(tab.id)}
+        className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+          activeWorkspace === tab.id
+            ? 'bg-orange-400 text-slate-950'
+            : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+        }`}
+      >
+        {tab.label}
+      </button>
+    ))}
+  </div>
+</nav>
 
+
+
+      {activeWorkspace === 'detection' && (
+        <>
+        <div className="mx-auto max-w-7xl px-5 py-9">
         {/* Hero */}
         <p className="text-sm font-semibold uppercase tracking-[.2em] text-orange-400">
           AI / Image intelligence
@@ -1535,9 +1641,9 @@ function App() {
 
                   setModelStatus(
                     event.target.value === 'yolo'
-                      ? yoloDetectorRef.current
-                        ? 'YOLOv10s ready'
-                        : 'YOLOv10s will load on first run'
+                      ? yoloLoadedRef.current
+  ? 'YOLOv10s ready'
+  : 'YOLOv10s will load on first run'
                       : cocoModelRef.current
                         ? `COCO-SSD ready · ${tf.getBackend().toUpperCase()}`
                         : 'COCO-SSD will load on first run'
@@ -2352,7 +2458,140 @@ function App() {
 <LiveDetection />
         {/* PHASE 5B — VIDEO DETECTION */}
 <VideoDetection />
+        {/* ==========================================
+    PHASE 8C — DETECTION HISTORY
+========================================== */}
 
+<section className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400">
+        Phase 08 · Workspace
+      </p>
+
+      <h2 className="mt-2 text-2xl font-bold">
+        Detection History
+      </h2>
+
+      <p className="mt-1 text-sm text-slate-400">
+        Review your previously saved detection sessions.
+      </p>
+    </div>
+
+    <button
+      type="button"
+      onClick={loadDetectionHistory}
+      disabled={historyLoading}
+      className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-semibold transition hover:border-cyan-400 disabled:opacity-40"
+    >
+      {historyLoading ? 'Refreshing...' : '↻ Refresh'}
+    </button>
+  </div>
+
+  <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <div className="rounded-xl bg-slate-950 p-4">
+      <p className="text-xs text-slate-500">Total sessions</p>
+      <p className="mt-2 text-2xl font-bold text-cyan-300">
+        {detectionHistory.length}
+      </p>
+    </div>
+
+    <div className="rounded-xl bg-slate-950 p-4">
+      <p className="text-xs text-slate-500">Total detections</p>
+      <p className="mt-2 text-2xl font-bold text-emerald-300">
+        {detectionHistory.reduce(
+          (sum, item) => sum + Number(item.total_detections || 0),
+          0
+        )}
+      </p>
+    </div>
+
+    <div className="col-span-2 rounded-xl bg-slate-950 p-4 sm:col-span-1">
+      <p className="text-xs text-slate-500">Models used</p>
+      <p className="mt-2 text-2xl font-bold text-violet-300">
+        {new Set(detectionHistory.map(item => item.model_name)).size}
+      </p>
+    </div>
+  </div>
+
+  {historyError && (
+    <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-300">
+      {historyError}
+    </div>
+  )}
+
+  {historyLoading ? (
+    <p className="mt-6 text-center text-sm text-slate-400">
+      Loading detection history...
+    </p>
+  ) : detectionHistory.length === 0 ? (
+    <div className="mt-6 rounded-xl border border-dashed border-slate-700 p-8 text-center">
+      <p className="text-lg font-semibold text-slate-300">
+        No detection sessions yet
+      </p>
+      <p className="mt-2 text-sm text-slate-500">
+        Run an image, webcam or video detection to start building your history.
+      </p>
+    </div>
+  ) : (
+    <div className="mt-6 space-y-3">
+      {detectionHistory.map(item => (
+        <div
+          key={item.id}
+          className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-950 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold text-white">
+                {item.model_name}
+              </h3>
+
+              <span className="rounded-full bg-cyan-400/10 px-2.5 py-1 text-xs capitalize text-cyan-300">
+                {item.detection_type}
+              </span>
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-400">
+              <span>
+                {item.total_detections} detections
+              </span>
+
+              <span>
+                {item.inference_time_ms != null
+                  ? `${Number(item.inference_time_ms).toFixed(2)} ms`
+                  : 'Time unavailable'}
+              </span>
+
+              <span>
+                {item.average_fps != null
+                  ? `${Number(item.average_fps).toFixed(2)} FPS`
+                  : 'FPS unavailable'}
+              </span>
+            </div>
+
+            <p className="mt-2 text-xs text-slate-500">
+              {item.created_at
+                ? new Date(item.created_at).toLocaleString()
+                : 'Date unavailable'}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm('Delete this detection session?')) {
+                deleteDetectionHistory(item.id)
+              }
+            }}
+            className="rounded-lg border border-rose-400/20 px-3 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/10"
+          >
+            Delete
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</section>
         {/* Export benchmark */}
         <div className="mt-5">
           <button
@@ -2381,10 +2620,17 @@ function App() {
           </p>
         </div>
 
-        <p className="mt-8 text-center text-xs text-slate-600">
+               <p className="mt-8 text-center text-xs text-slate-600">
           VisionGuard · Multi-model computer vision laboratory.
         </p>
       </div>
+      </>
+      )}
+
+      {activeWorkspace === 'projects' && <ProjectsWorkspace />}
+      {activeWorkspace === 'datasets' && <DatasetsWorkspace />} 
+      {activeWorkspace === 'files' && <FilesWorkspace />}
+      {activeWorkspace === 'dashboard' && <DashboardWorkspace />}
     </main>
   )
 }

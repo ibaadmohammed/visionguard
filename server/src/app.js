@@ -10,6 +10,7 @@ import projectRoutes from './routes/project.routes.js'
 import datasetRoutes from './routes/dataset.routes.js'
 import uploadRoutes from './routes/upload.routes.js'
 import healthRoutes from './routes/health.routes.js'
+import dashboardRoutes from './routes/dashboard.routes.js'
 import {
   notFoundHandler,
   errorHandler
@@ -58,6 +59,7 @@ app.use('/api/detections', detectionRoutes)
 app.use('/api/projects', projectRoutes)
 app.use('/api/datasets', datasetRoutes)
 app.use('/api/uploads', uploadRoutes)
+app.use('/api/dashboard', dashboardRoutes)
 // Root endpoint
 app.get('/', (req, res) => {
   res.status(200).json({

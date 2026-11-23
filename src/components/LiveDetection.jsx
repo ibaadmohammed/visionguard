@@ -2,17 +2,18 @@
 import { useEffect, useRef, useState } from 'react'
 import * as cocoSsd from '@tensorflow-models/coco-ssd'
 import * as tf from '@tensorflow/tfjs'
-import { pipeline } from '@huggingface/transformers'
+import {
+  detectWithYolo,
+  loadYoloModel
+} from '../utils/services/yolo.js'
 import TrackingAnalytics from './TrackingAnalytics'
 
-const YOLO_MODEL_ID = 'onnx-community/yolov10s'
 
 export default function LiveDetection() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
   const animationRef = useRef(null)
-  const yoloRef = useRef(null)
   const cocoRef = useRef(null)
   const busyRef = useRef(false)
   const thresholdRef = useRef(50)
@@ -35,43 +36,20 @@ export default function LiveDetection() {
   }, [threshold])
 
   async function loadYolo() {
-    if (yoloRef.current) return yoloRef.current
+  setStatus('Loading YOLOv10s...')
 
-    setStatus('Loading YOLOv10s...')
-
-    let detector
-
-    try {
-      if (navigator.gpu) {
-        try {
-          detector = await pipeline(
-            'object-detection',
-            YOLO_MODEL_ID,
-            { device: 'webgpu' }
-          )
-        } catch (webgpuError) {
-          console.warn('WebGPU unavailable. Falling back to WASM.', webgpuError)
-        }
-      }
-
-      if (!detector) {
-        detector = await pipeline(
-          'object-detection',
-          YOLO_MODEL_ID,
-          { device: 'wasm' }
-        )
-      }
-
-      yoloRef.current = detector
-      return detector
-    } catch (err) {
-      throw new Error(
-        `YOLOv10s failed to load: ${err?.message || 'Unknown error'}`
-      )
-    }
+  try {
+    await loadYoloModel()
+    return true
+  } catch (err) {
+    throw new Error(
+      `YOLOv10s failed to load: ${err?.message || 'Unknown error'}`
+    )
   }
+}
 
-  async function loadCoco() {
+
+async function loadCoco() {
     if (cocoRef.current) return cocoRef.current
 
     setStatus('Loading COCO-SSD...')
@@ -98,33 +76,7 @@ export default function LiveDetection() {
     }
   }
 
-  function normalizeYolo(results) {
-    return results.map(item => {
-      const box = item.box || {}
 
-      const xmin = Number(box.xmin)
-      const ymin = Number(box.ymin)
-      const xmax = Number(box.xmax)
-      const ymax = Number(box.ymax)
-
-      return {
-        class: String(item.label || '').trim().toLowerCase(),
-        score: Number(item.score),
-        bbox: [
-          xmin,
-          ymin,
-          xmax - xmin,
-          ymax - ymin
-        ]
-      }
-    }).filter(item =>
-      item.class &&
-      Number.isFinite(item.score) &&
-      item.bbox.every(Number.isFinite) &&
-      item.bbox[2] > 0 &&
-      item.bbox[3] > 0
-    )
-  }
 
   function drawDetections(results, width, height) {
     const canvas = canvasRef.current
@@ -294,13 +246,13 @@ export default function LiveDetection() {
 
         if (selectedModel === 'yolo') {
           const model = await loadYolo()
+const predictions = await model(video, {
+  threshold: confidence,
+  percentage: false
+})
+await loadYolo()
 
-          const predictions = await model(video, {
-            threshold: confidence,
-            percentage: false
-          })
-
-          results = normalizeYolo(predictions)
+results = await detectWithYolo(video, confidence)
         } else {
           const model = await loadCoco()
 
