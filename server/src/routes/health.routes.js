@@ -1,12 +1,10 @@
 
 import { Router } from 'express'
-import {
-  checkDatabaseConnection
-} from '../config/db.js'
+import prisma from '../config/prisma.js'
 
 const router = Router()
 
-// Check whether the backend server is running
+// CHECK BACKEND STATUS
 router.get('/', (req, res) => {
   res.status(200).json({
     success: true,
@@ -15,10 +13,12 @@ router.get('/', (req, res) => {
   })
 })
 
-// Check whether PostgreSQL is connected
+// CHECK POSTGRESQL CONNECTION
 router.get('/db', async (req, res, next) => {
   try {
-    const database = await checkDatabaseConnection()
+    const database = await prisma.$queryRaw`
+      SELECT NOW() AS current_time
+    `
 
     res.status(200).json({
       success: true,
