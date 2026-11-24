@@ -1,5 +1,5 @@
 
-import pool from '../config/db.js'
+import prisma from '../config/prisma.js'
 
 // CREATE PROJECT
 export const createProject = async (req, res, next) => {
@@ -28,21 +28,22 @@ export const createProject = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `INSERT INTO projects (user_id, name, description)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [
-        req.user.id,
-        name.trim(),
-        description?.trim() || null
-      ]
-    )
+    const project = await prisma.projects.create({
+      data: {
+        user_id: BigInt(req.user.id),
+        name: name.trim(),
+        description: description?.trim() || null
+      }
+    })
 
     res.status(201).json({
       success: true,
       message: 'Project created successfully.',
-      project: result.rows[0]
+      project: {
+        ...project,
+        id: project.id.toString(),
+        user_id: project.user_id.toString()
+      }
     })
   } catch (error) {
     next(error)
@@ -52,24 +53,36 @@ export const createProject = async (req, res, next) => {
 // GET ALL USER PROJECTS
 export const getProjects = async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `SELECT
-         p.*,
-         COUNT(DISTINCT d.id)::INTEGER AS dataset_count,
-         COUNT(DISTINCT s.id)::INTEGER AS detection_session_count
-       FROM projects p
-       LEFT JOIN datasets d ON d.project_id = p.id
-       LEFT JOIN detection_sessions s ON s.project_id = p.id
-       WHERE p.user_id = $1
-       GROUP BY p.id
-       ORDER BY p.created_at DESC`,
-      [req.user.id]
-    )
+    const projects = await prisma.projects.findMany({
+      where: {
+        user_id: BigInt(req.user.id)
+      },
+      include: {
+        _count: {
+          select: {
+            datasets: true,
+            detection_sessions: true
+          }
+        }
+      },
+      orderBy: {
+        created_at: 'desc'
+      }
+    })
+
+    const formattedProjects = projects.map(project => ({
+      ...project,
+      id: project.id.toString(),
+      user_id: project.user_id.toString(),
+      dataset_count: project._count.datasets,
+      detection_session_count: project._count.detection_sessions,
+      _count: undefined
+    }))
 
     res.status(200).json({
       success: true,
-      count: result.rows.length,
-      projects: result.rows
+      count: formattedProjects.length,
+      projects: formattedProjects
     })
   } catch (error) {
     next(error)
@@ -88,29 +101,40 @@ export const getProject = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `SELECT
-         p.*,
-         COUNT(DISTINCT d.id)::INTEGER AS dataset_count,
-         COUNT(DISTINCT s.id)::INTEGER AS detection_session_count
-       FROM projects p
-       LEFT JOIN datasets d ON d.project_id = p.id
-       LEFT JOIN detection_sessions s ON s.project_id = p.id
-       WHERE p.id = $1 AND p.user_id = $2
-       GROUP BY p.id`,
-      [id, req.user.id]
-    )
+    const project = await prisma.projects.findFirst({
+      where: {
+        id: BigInt(id),
+        user_id: BigInt(req.user.id)
+      },
+      include: {
+        _count: {
+          select: {
+            datasets: true,
+            detection_sessions: true
+          }
+        }
+      }
+    })
 
-    if (result.rows.length === 0) {
+    if (!project) {
       return res.status(404).json({
         success: false,
         message: 'Project not found.'
       })
     }
 
+    const formattedProject = {
+      ...project,
+      id: project.id.toString(),
+      user_id: project.user_id.toString(),
+      dataset_count: project._count.datasets,
+      detection_session_count: project._count.detection_sessions,
+      _count: undefined
+    }
+
     res.status(200).json({
       success: true,
-      project: result.rows[0]
+      project: formattedProject
     })
   } catch (error) {
     next(error)
@@ -162,37 +186,42 @@ export const updateProject = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `UPDATE projects
-       SET
-         name = COALESCE($1, name),
-         description = CASE
-           WHEN $2::BOOLEAN THEN $3
-           ELSE description
-         END,
-         updated_at = NOW()
-       WHERE id = $4 AND user_id = $5
-       RETURNING *`,
-      [
-        name === undefined ? null : name.trim(),
-        description !== undefined,
-        description === undefined ? null : (description?.trim() || null),
-        id,
-        req.user.id
-      ]
-    )
+    const existingProject = await prisma.projects.findFirst({
+      where: {
+        id: BigInt(id),
+        user_id: BigInt(req.user.id)
+      },
+      select: { id: true }
+    })
 
-    if (result.rows.length === 0) {
+    if (!existingProject) {
       return res.status(404).json({
         success: false,
         message: 'Project not found.'
       })
     }
 
+    const project = await prisma.projects.update({
+      where: {
+        id: existingProject.id
+      },
+      data: {
+        ...(name !== undefined && { name: name.trim() }),
+        ...(description !== undefined && {
+          description: description?.trim() || null
+        }),
+        updated_at: new Date()
+      }
+    })
+
     res.status(200).json({
       success: true,
       message: 'Project updated successfully.',
-      project: result.rows[0]
+      project: {
+        ...project,
+        id: project.id.toString(),
+        user_id: project.user_id.toString()
+      }
     })
   } catch (error) {
     next(error)
@@ -211,14 +240,14 @@ export const deleteProject = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `DELETE FROM projects
-       WHERE id = $1 AND user_id = $2
-       RETURNING id`,
-      [id, req.user.id]
-    )
+    const result = await prisma.projects.deleteMany({
+      where: {
+        id: BigInt(id),
+        user_id: BigInt(req.user.id)
+      }
+    })
 
-    if (result.rows.length === 0) {
+    if (result.count === 0) {
       return res.status(404).json({
         success: false,
         message: 'Project not found.'
