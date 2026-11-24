@@ -1,10 +1,21 @@
+import prisma from '../config/prisma.js'
 
-import pool from '../config/db.js'
+// FORMAT BIGINT IDS FOR JSON RESPONSES
+const formatSession = (session) => ({
+  ...session,
+  id: session.id.toString(),
+  user_id: session.user_id.toString(),
+  project_id: session.project_id?.toString() ?? null
+})
+
+const formatDetection = (detection) => ({
+  ...detection,
+  id: detection.id.toString(),
+  session_id: detection.session_id.toString()
+})
 
 // SAVE A DETECTION SESSION
 export const createDetectionSession = async (req, res, next) => {
-  const client = await pool.connect()
-
   try {
     const {
       modelName,
@@ -18,10 +29,22 @@ export const createDetectionSession = async (req, res, next) => {
 
     const allowedTypes = ['image', 'webcam', 'video', 'dataset']
 
-    if (!modelName || !detectionType || !Array.isArray(detections)) {
+    if (
+      typeof modelName !== 'string' ||
+      !modelName.trim() ||
+      !detectionType ||
+      !Array.isArray(detections)
+    ) {
       return res.status(400).json({
         success: false,
         message: 'Model name, detection type and detections are required.'
+      })
+    }
+
+    if (modelName.trim().length > 150) {
+      return res.status(400).json({
+        success: false,
+        message: 'Model name must not exceed 150 characters.'
       })
     }
 
@@ -40,7 +63,8 @@ export const createDetectionSession = async (req, res, next) => {
     }
 
     const validNumber = (value) =>
-      value === undefined || value === null ||
+      value === undefined ||
+      value === null ||
       (typeof value === 'number' && Number.isFinite(value))
 
     if (
@@ -90,94 +114,93 @@ export const createDetectionSession = async (req, res, next) => {
       })
     }
 
-    await client.query('BEGIN')
+    if (
+      projectId !== undefined &&
+      projectId !== null &&
+      !/^\d+$/.test(String(projectId))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid project ID.'
+      })
+    }
 
-    let safeProjectId = null
+    // CREATE SESSION AND RESULTS IN ONE TRANSACTION
+    const session = await prisma.$transaction(async (tx) => {
+      let safeProjectId = null
 
-    if (projectId !== undefined && projectId !== null) {
-      const project = await client.query(
-        'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
-        [projectId, req.user.id]
-      )
-
-      if (project.rows.length === 0) {
-        await client.query('ROLLBACK')
-
-        return res.status(404).json({
-          success: false,
-          message: 'Project not found.'
+      if (projectId !== undefined && projectId !== null) {
+        const project = await tx.projects.findFirst({
+          where: {
+            id: BigInt(projectId),
+            user_id: BigInt(req.user.id)
+          },
+          select: { id: true }
         })
+
+        if (!project) {
+          return null
+        }
+
+        safeProjectId = project.id
       }
 
-      safeProjectId = projectId
+      return tx.detection_sessions.create({
+        data: {
+          user_id: BigInt(req.user.id),
+          project_id: safeProjectId,
+          model_name: modelName.trim(),
+          detection_type: detectionType,
+          total_detections: count,
+          inference_time_ms: inferenceTimeMs ?? null,
+          average_fps: averageFps ?? null,
+          detection_results: {
+            create: detections.map((detection) => ({
+              class_name: detection.className.trim(),
+              confidence: detection.confidence,
+              x_min: detection.xMin ?? null,
+              y_min: detection.yMin ?? null,
+              x_max: detection.xMax ?? null,
+              y_max: detection.yMax ?? null
+            }))
+          }
+        }
+      })
+    })
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found.'
+      })
     }
-
-    const sessionResult = await client.query(
-      `INSERT INTO detection_sessions
-       (user_id, project_id, model_name, detection_type,
-        total_detections, inference_time_ms, average_fps)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [
-        req.user.id,
-        safeProjectId,
-        modelName.trim(),
-        detectionType,
-        count,
-        inferenceTimeMs ?? null,
-        averageFps ?? null
-      ]
-    )
-
-    const session = sessionResult.rows[0]
-
-    for (const detection of detections) {
-      await client.query(
-        `INSERT INTO detection_results
-         (session_id, class_name, confidence, x_min, y_min, x_max, y_max)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          session.id,
-          detection.className.trim(),
-          detection.confidence,
-          detection.xMin ?? null,
-          detection.yMin ?? null,
-          detection.xMax ?? null,
-          detection.yMax ?? null
-        ]
-      )
-    }
-
-    await client.query('COMMIT')
 
     return res.status(201).json({
       success: true,
       message: 'Detection session saved successfully.',
-      session
+      session: formatSession(session)
     })
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {})
     next(error)
-  } finally {
-    client.release()
   }
 }
 
 // GET ALL USER DETECTION SESSIONS
 export const getDetectionSessions = async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `SELECT *
-       FROM detection_sessions
-       WHERE user_id = $1
-       ORDER BY created_at DESC`,
-      [req.user.id]
-    )
+    const sessions = await prisma.detection_sessions.findMany({
+      where: {
+        user_id: BigInt(req.user.id)
+      },
+      orderBy: {
+        created_at: 'desc'
+      }
+    })
 
     return res.status(200).json({
       success: true,
-      count: result.rows.length,
-      sessions: result.rows
+      count: sessions.length,
+      sessions: sessions.map(formatSession)
     })
   } catch (error) {
     next(error)
@@ -196,32 +219,33 @@ export const getDetectionSession = async (req, res, next) => {
       })
     }
 
-    const sessionResult = await pool.query(
-      `SELECT *
-       FROM detection_sessions
-       WHERE id = $1 AND user_id = $2`,
-      [id, req.user.id]
-    )
+    const session = await prisma.detection_sessions.findFirst({
+      where: {
+        id: BigInt(id),
+        user_id: BigInt(req.user.id)
+      },
+      include: {
+        detection_results: {
+          orderBy: {
+            id: 'asc'
+          }
+        }
+      }
+    })
 
-    if (sessionResult.rows.length === 0) {
+    if (!session) {
       return res.status(404).json({
         success: false,
         message: 'Detection session not found.'
       })
     }
 
-    const detectionsResult = await pool.query(
-      `SELECT *
-       FROM detection_results
-       WHERE session_id = $1
-       ORDER BY id ASC`,
-      [id]
-    )
+    const { detection_results, ...sessionData } = session
 
     return res.status(200).json({
       success: true,
-      session: sessionResult.rows[0],
-      detections: detectionsResult.rows
+      session: formatSession(sessionData),
+      detections: detection_results.map(formatDetection)
     })
   } catch (error) {
     next(error)
@@ -240,14 +264,14 @@ export const deleteDetectionSession = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `DELETE FROM detection_sessions
-       WHERE id = $1 AND user_id = $2
-       RETURNING id`,
-      [id, req.user.id]
-    )
+    const result = await prisma.detection_sessions.deleteMany({
+      where: {
+        id: BigInt(id),
+        user_id: BigInt(req.user.id)
+      }
+    })
 
-    if (result.rows.length === 0) {
+    if (result.count === 0) {
       return res.status(404).json({
         success: false,
         message: 'Detection session not found.'
