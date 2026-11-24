@@ -3,10 +3,7 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 import app from './app.js'
-import {
-  checkDatabaseConnection,
-  closeDatabaseConnection
-} from './config/db.js'
+import prisma from './config/prisma.js'
 
 const PORT = process.env.PORT || 5000
 
@@ -14,16 +11,16 @@ let server
 
 const startServer = async () => {
   try {
-    // Start the HTTP server
+    // START HTTP SERVER
     server = app.listen(PORT, () => {
       console.log(`VisionGuard API running on port ${PORT}`)
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
       console.log(`Health: http://localhost:${PORT}/api/health`)
     })
 
-    // Check database connectivity
+    // CHECK DATABASE CONNECTIVITY
     try {
-      await checkDatabaseConnection()
+      await prisma.$queryRaw`SELECT 1`
       console.log('PostgreSQL connection successful')
     } catch (error) {
       console.error('PostgreSQL connection failed:', error.message)
@@ -35,15 +32,15 @@ const startServer = async () => {
   }
 }
 
-// Graceful shutdown
+// GRACEFUL SHUTDOWN
 const shutdown = async (signal) => {
   console.log(`${signal} received. Shutting down...`)
 
   if (server) {
     server.close(async () => {
       try {
-        await closeDatabaseConnection()
-        console.log('Server and database connections closed.')
+        await prisma.$disconnect()
+        console.log('Server and Prisma connections closed.')
         process.exit(0)
       } catch (error) {
         console.error('Shutdown error:', error.message)
@@ -51,6 +48,7 @@ const shutdown = async (signal) => {
       }
     })
   } else {
+    await prisma.$disconnect()
     process.exit(0)
   }
 }
