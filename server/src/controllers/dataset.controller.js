@@ -1,5 +1,5 @@
 
-import pool from '../config/db.js'
+import prisma from '../config/prisma.js'
 
 // CREATE DATASET
 export const createDataset = async (req, res, next) => {
@@ -30,10 +30,7 @@ export const createDataset = async (req, res, next) => {
       })
     }
 
-    if (
-      !Number.isInteger(imageCount) ||
-      imageCount < 0
-    ) {
+    if (!Number.isInteger(imageCount) || imageCount < 0) {
       return res.status(400).json({
         success: false,
         message: 'Image count must be a non-negative integer.'
@@ -63,36 +60,39 @@ export const createDataset = async (req, res, next) => {
       })
     }
 
-    const project = await pool.query(
-      'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
-      [projectId, req.user.id]
-    )
+    const project = await prisma.projects.findFirst({
+      where: {
+        id: BigInt(projectId),
+        user_id: BigInt(req.user.id)
+      },
+      select: { id: true }
+    })
 
-    if (project.rows.length === 0) {
+    if (!project) {
       return res.status(404).json({
         success: false,
         message: 'Project not found.'
       })
     }
 
-    const result = await pool.query(
-      `INSERT INTO datasets
-       (project_id, name, description, image_count, annotation_format)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [
-        projectId,
-        name.trim(),
-        description?.trim() || null,
-        imageCount,
-        annotationFormat
-      ]
-    )
+    const dataset = await prisma.datasets.create({
+      data: {
+        project_id: project.id,
+        name: name.trim(),
+        description: description?.trim() || null,
+        image_count: imageCount,
+        annotation_format: annotationFormat
+      }
+    })
 
     res.status(201).json({
       success: true,
       message: 'Dataset created successfully.',
-      dataset: result.rows[0]
+      dataset: {
+        ...dataset,
+        id: dataset.id.toString(),
+        project_id: dataset.project_id.toString()
+      }
     })
   } catch (error) {
     next(error)
@@ -102,19 +102,27 @@ export const createDataset = async (req, res, next) => {
 // GET ALL DATASETS BELONGING TO USER
 export const getDatasets = async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `SELECT d.*
-       FROM datasets d
-       INNER JOIN projects p ON p.id = d.project_id
-       WHERE p.user_id = $1
-       ORDER BY d.created_at DESC`,
-      [req.user.id]
-    )
+    const datasets = await prisma.datasets.findMany({
+      where: {
+        projects: {
+          user_id: BigInt(req.user.id)
+        }
+      },
+      orderBy: {
+        created_at: 'desc'
+      }
+    })
+
+    const formattedDatasets = datasets.map(dataset => ({
+      ...dataset,
+      id: dataset.id.toString(),
+      project_id: dataset.project_id.toString()
+    }))
 
     res.status(200).json({
       success: true,
-      count: result.rows.length,
-      datasets: result.rows
+      count: formattedDatasets.length,
+      datasets: formattedDatasets
     })
   } catch (error) {
     next(error)
@@ -133,19 +141,28 @@ export const getProjectDatasets = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `SELECT d.*
-       FROM datasets d
-       INNER JOIN projects p ON p.id = d.project_id
-       WHERE d.project_id = $1 AND p.user_id = $2
-       ORDER BY d.created_at DESC`,
-      [projectId, req.user.id]
-    )
+    const datasets = await prisma.datasets.findMany({
+      where: {
+        project_id: BigInt(projectId),
+        projects: {
+          user_id: BigInt(req.user.id)
+        }
+      },
+      orderBy: {
+        created_at: 'desc'
+      }
+    })
+
+    const formattedDatasets = datasets.map(dataset => ({
+      ...dataset,
+      id: dataset.id.toString(),
+      project_id: dataset.project_id.toString()
+    }))
 
     res.status(200).json({
       success: true,
-      count: result.rows.length,
-      datasets: result.rows
+      count: formattedDatasets.length,
+      datasets: formattedDatasets
     })
   } catch (error) {
     next(error)
@@ -225,47 +242,47 @@ export const updateDataset = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `UPDATE datasets d
-       SET
-         name = COALESCE($1, d.name),
-         description = CASE
-           WHEN $2::BOOLEAN THEN $3
-           ELSE d.description
-         END,
-         image_count = COALESCE($4, d.image_count),
-         annotation_format = CASE
-           WHEN $5::BOOLEAN THEN $6
-           ELSE d.annotation_format
-         END
-       FROM projects p
-       WHERE d.id = $7
-         AND d.project_id = p.id
-         AND p.user_id = $8
-       RETURNING d.*`,
-      [
-        name === undefined ? null : name.trim(),
-        description !== undefined,
-        description === undefined ? null : (description?.trim() || null),
-        imageCount ?? null,
-        annotationFormat !== undefined,
-        annotationFormat ?? null,
-        id,
-        req.user.id
-      ]
-    )
+    const existingDataset = await prisma.datasets.findFirst({
+      where: {
+        id: BigInt(id),
+        projects: {
+          user_id: BigInt(req.user.id)
+        }
+      },
+      select: { id: true }
+    })
 
-    if (result.rows.length === 0) {
+    if (!existingDataset) {
       return res.status(404).json({
         success: false,
         message: 'Dataset not found.'
       })
     }
 
+    const dataset = await prisma.datasets.update({
+      where: {
+        id: existingDataset.id
+      },
+      data: {
+        ...(name !== undefined && { name: name.trim() }),
+        ...(description !== undefined && {
+          description: description?.trim() || null
+        }),
+        ...(imageCount !== undefined && { image_count: imageCount }),
+        ...(annotationFormat !== undefined && {
+          annotation_format: annotationFormat
+        })
+      }
+    })
+
     res.status(200).json({
       success: true,
       message: 'Dataset updated successfully.',
-      dataset: result.rows[0]
+      dataset: {
+        ...dataset,
+        id: dataset.id.toString(),
+        project_id: dataset.project_id.toString()
+      }
     })
   } catch (error) {
     next(error)
@@ -284,17 +301,16 @@ export const deleteDataset = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `DELETE FROM datasets d
-       USING projects p
-       WHERE d.id = $1
-         AND d.project_id = p.id
-         AND p.user_id = $2
-       RETURNING d.id`,
-      [id, req.user.id]
-    )
+    const result = await prisma.datasets.deleteMany({
+      where: {
+        id: BigInt(id),
+        projects: {
+          user_id: BigInt(req.user.id)
+        }
+      }
+    })
 
-    if (result.rows.length === 0) {
+    if (result.count === 0) {
       return res.status(404).json({
         success: false,
         message: 'Dataset not found.'
