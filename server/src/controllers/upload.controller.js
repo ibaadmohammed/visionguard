@@ -1,13 +1,30 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import pool from '../config/db.js'
+import prisma from '../config/prisma.js'
+import {
+  uploadImageToStorage,
+  deleteImageFromStorage,
+  getImageSignedUrl
+} from '../services/storage.service.js'
 
-const uploadDirectory = path.resolve(process.cwd(), 'uploads')
+// FORMAT UPLOADED FILE FOR JSON
+const formatUploadedFile = (file, signedUrl = null) => ({
+  id: file.id.toString(),
+  project_id: file.project_id?.toString() ?? null,
+  dataset_id: file.dataset_id?.toString() ?? null,
+  original_name: file.original_name,
+  mime_type: file.mime_type,
+  size_bytes: file.size_bytes.toString(),
+  created_at: file.created_at,
+  signed_url: signedUrl
+})
 
 // UPLOAD IMAGE
 export const saveUploadedImage = async (req, res, next) => {
   let savedFile = null
+  let storagePath = null
+  let metadataSaved = false
 
   try {
     if (!req.file) {
@@ -27,124 +44,160 @@ export const saveUploadedImage = async (req, res, next) => {
       /^\d+$/.test(String(value))
 
     if (!validOptionalId(projectId) || !validOptionalId(datasetId)) {
-      await fs.unlink(savedFile.path)
-
       return res.status(400).json({
         success: false,
         message: 'Invalid project or dataset ID.'
       })
     }
 
-    const client = await pool.connect()
+    // VERIFY OWNERSHIP
+    const ownership = await prisma.$transaction(async tx => {
+      let safeProjectId = null
+      let safeDatasetId = null
 
-    try {
-      await client.query('BEGIN')
-
-      // VERIFY PROJECT OWNERSHIP
       if (projectId) {
-        const project = await client.query(
-          `SELECT id
-           FROM projects
-           WHERE id = $1 AND user_id = $2`,
-          [projectId, req.user.id]
-        )
+        const project = await tx.projects.findFirst({
+          where: {
+            id: BigInt(projectId),
+            user_id: BigInt(req.user.id)
+          },
+          select: { id: true }
+        })
 
-        if (project.rows.length === 0) {
-          await client.query('ROLLBACK')
-          await fs.unlink(savedFile.path)
+        if (!project) return { notFound: 'project' }
 
-          return res.status(404).json({
-            success: false,
-            message: 'Project not found.'
-          })
-        }
+        safeProjectId = project.id
       }
 
-      // VERIFY DATASET OWNERSHIP AND PROJECT RELATIONSHIP
       if (datasetId) {
-        const dataset = await client.query(
-          `SELECT d.id
-           FROM datasets d
-           INNER JOIN projects p ON p.id = d.project_id
-           WHERE d.id = $1
-             AND p.user_id = $2
-             AND ($3::INTEGER IS NULL OR d.project_id = $3)`,
-          [
-            datasetId,
-            req.user.id,
-            projectId || null
-          ]
-        )
+        const dataset = await tx.datasets.findFirst({
+          where: {
+            id: BigInt(datasetId),
+            projects: {
+              user_id: BigInt(req.user.id)
+            },
+            ...(safeProjectId !== null && {
+              project_id: safeProjectId
+            })
+          },
+          select: { id: true }
+        })
 
-        if (dataset.rows.length === 0) {
-          await client.query('ROLLBACK')
-          await fs.unlink(savedFile.path)
+        if (!dataset) return { notFound: 'dataset' }
 
-          return res.status(404).json({
-            success: false,
-            message: 'Dataset not found.'
-          })
-        }
+        safeDatasetId = dataset.id
       }
 
-      // SAVE UPLOAD METADATA
-      const result = await client.query(
-        `INSERT INTO uploaded_files
-         (user_id, project_id, dataset_id, original_name,
-          stored_name, mime_type, size_bytes, storage_path)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, project_id, dataset_id, original_name,
-                   mime_type, size_bytes, created_at`,
-        [
-          req.user.id,
-          projectId || null,
-          datasetId || null,
-          path.basename(savedFile.originalname),
-          savedFile.filename,
-          savedFile.mimetype,
-          savedFile.size,
-          savedFile.path
-        ]
-      )
+      return {
+        projectId: safeProjectId,
+        datasetId: safeDatasetId
+      }
+    })
 
-      await client.query('COMMIT')
-
-      return res.status(201).json({
-        success: true,
-        message: 'Image uploaded successfully.',
-        file: result.rows[0]
+    if (ownership.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: ownership.notFound === 'project'
+          ? 'Project not found.'
+          : 'Dataset not found.'
       })
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {})
-      throw error
-    } finally {
-      client.release()
     }
+
+    // UPLOAD IMAGE TO SUPABASE STORAGE
+    storagePath = await uploadImageToStorage({
+      localPath: savedFile.path,
+      storedName: savedFile.filename,
+      userId: req.user.id,
+      mimeType: savedFile.mimetype
+    })
+
+    // SAVE METADATA IN POSTGRESQL
+    const file = await prisma.uploaded_files.create({
+      data: {
+        user_id: BigInt(req.user.id),
+        project_id: ownership.projectId,
+        dataset_id: ownership.datasetId,
+        original_name: path.basename(savedFile.originalname),
+        stored_name: savedFile.filename,
+        mime_type: savedFile.mimetype,
+        size_bytes: BigInt(savedFile.size),
+        storage_path: storagePath
+      },
+      select: {
+        id: true,
+        project_id: true,
+        dataset_id: true,
+        original_name: true,
+        mime_type: true,
+        size_bytes: true,
+        created_at: true
+      }
+    })
+
+    metadataSaved = true
+
+    const signedUrl = await getImageSignedUrl(storagePath)
+
+    return res.status(201).json({
+      success: true,
+      message: 'Image uploaded successfully.',
+      file: formatUploadedFile(file, signedUrl)
+    })
   } catch (error) {
-    if (savedFile) {
-      await fs.unlink(savedFile.path).catch(() => {})
+    // ROLL BACK STORAGE UPLOAD IF DATABASE INSERT FAILED
+    if (storagePath && !metadataSaved) {
+      await deleteImageFromStorage(storagePath).catch(cleanupError => {
+        console.error('Supabase Storage cleanup failed:', cleanupError)
+      })
     }
 
     next(error)
+  } finally {
+    // REMOVE TEMPORARY LOCAL FILE
+    if (savedFile?.path) {
+      await fs.unlink(savedFile.path).catch(error => {
+        if (error.code !== 'ENOENT') {
+          console.error('Temporary upload cleanup failed:', error)
+        }
+      })
+    }
   }
 }
 
 // GET USER UPLOADS
 export const getUploadedFiles = async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `SELECT id, project_id, dataset_id, original_name,
-              mime_type, size_bytes, created_at
-       FROM uploaded_files
-       WHERE user_id = $1
-       ORDER BY created_at DESC`,
-      [req.user.id]
+    const files = await prisma.uploaded_files.findMany({
+      where: {
+        user_id: BigInt(req.user.id)
+      },
+      select: {
+        id: true,
+        project_id: true,
+        dataset_id: true,
+        original_name: true,
+        mime_type: true,
+        size_bytes: true,
+        storage_path: true,
+        created_at: true
+      },
+      orderBy: {
+        created_at: 'desc'
+      }
+    })
+
+    const formattedFiles = await Promise.all(
+      files.map(async file => {
+        const signedUrl = await getImageSignedUrl(file.storage_path)
+
+        return formatUploadedFile(file, signedUrl)
+      })
     )
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      count: result.rows.length,
-      files: result.rows
+      count: formattedFiles.length,
+      files: formattedFiles
     })
   } catch (error) {
     next(error)
@@ -163,34 +216,52 @@ export const deleteUploadedFile = async (req, res, next) => {
       })
     }
 
-    const result = await pool.query(
-      `DELETE FROM uploaded_files
-       WHERE id = $1 AND user_id = $2
-       RETURNING id, stored_name`,
-      [id, req.user.id]
-    )
+    const file = await prisma.uploaded_files.findFirst({
+      where: {
+        id: BigInt(id),
+        user_id: BigInt(req.user.id)
+      },
+      select: {
+        id: true,
+        storage_path: true
+      }
+    })
 
-    if (result.rows.length === 0) {
+    if (!file) {
       return res.status(404).json({
         success: false,
         message: 'Uploaded file not found.'
       })
     }
 
-    const filePath = path.join(
-      uploadDirectory,
-      result.rows[0].stored_name
-    )
-
-    await fs.unlink(filePath).catch(error => {
-      if (error.code !== 'ENOENT') {
-        throw error
+    const result = await prisma.uploaded_files.deleteMany({
+      where: {
+        id: file.id,
+        user_id: BigInt(req.user.id)
       }
     })
 
-    res.status(200).json({
+    if (result.count === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Uploaded file not found.'
+      })
+    }
+
+    // REMOVE IMAGE FROM SUPABASE STORAGE
+    let storageCleanupPending = false
+
+    try {
+      await deleteImageFromStorage(file.storage_path)
+    } catch (error) {
+      storageCleanupPending = true
+      console.error('Supabase Storage deletion failed:', error)
+    }
+
+    return res.status(200).json({
       success: true,
-      message: 'Uploaded file deleted successfully.'
+      message: 'Uploaded file deleted successfully.',
+      storage_cleanup_pending: storageCleanupPending
     })
   } catch (error) {
     next(error)
