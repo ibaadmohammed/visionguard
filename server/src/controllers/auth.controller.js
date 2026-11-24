@@ -1,7 +1,8 @@
 
+
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { query } from '../config/db.js'
+import prisma from '../config/prisma.js'
 
 const generateToken = (user) => {
   if (!process.env.JWT_SECRET) {
@@ -10,11 +11,11 @@ const generateToken = (user) => {
 
   return jwt.sign(
     {
-  id: user.id,
-  full_name: user.full_name,
-  email: user.email,
-  role: user.role
-},
+      id: user.id.toString(),
+      full_name: user.full_name,
+      email: user.email,
+      role: user.role
+    },
     process.env.JWT_SECRET,
     {
       expiresIn: process.env.JWT_EXPIRES_IN || '1d'
@@ -67,12 +68,12 @@ export const registerUser = async (req, res, next) => {
       })
     }
 
-    const existingUser = await query(
-      'SELECT id FROM users WHERE email = $1',
-      [cleanEmail]
-    )
+    const existingUser = await prisma.users.findUnique({
+      where: { email: cleanEmail },
+      select: { id: true }
+    })
 
-    if (existingUser.rows.length > 0) {
+    if (existingUser) {
       return res.status(409).json({
         success: false,
         message: 'An account with this email already exists.'
@@ -81,24 +82,36 @@ export const registerUser = async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12)
 
-    const result = await query(
-      `INSERT INTO users (full_name, email, password_hash)
-       VALUES ($1, $2, $3)
-       RETURNING id, full_name, email, role, created_at`,
-      [cleanName, cleanEmail, passwordHash]
-    )
+    const user = await prisma.users.create({
+      data: {
+        full_name: cleanName,
+        email: cleanEmail,
+        password_hash: passwordHash
+      },
+      select: {
+        id: true,
+        full_name: true,
+        email: true,
+        role: true,
+        created_at: true
+      }
+    })
 
-    const user = result.rows[0]
-    const token = generateToken(user)
+    const safeUser = {
+      ...user,
+      id: user.id.toString()
+    }
+
+    const token = generateToken(safeUser)
 
     return res.status(201).json({
       success: true,
       message: 'Account created successfully.',
       token,
-      user
+      user: safeUser
     })
   } catch (error) {
-    if (error.code === '23505') {
+    if (error.code === 'P2002') {
       return res.status(409).json({
         success: false,
         message: 'An account with this email already exists.'
@@ -123,21 +136,16 @@ export const loginUser = async (req, res, next) => {
 
     const cleanEmail = email.trim().toLowerCase()
 
-    const result = await query(
-      `SELECT id, full_name, email, password_hash, role, is_active
-       FROM users
-       WHERE email = $1`,
-      [cleanEmail]
-    )
+    const user = await prisma.users.findUnique({
+      where: { email: cleanEmail }
+    })
 
-    if (result.rows.length === 0) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password.'
       })
     }
-
-    const user = result.rows[0]
 
     if (!user.is_active) {
       return res.status(403).json({
@@ -158,18 +166,20 @@ export const loginUser = async (req, res, next) => {
       })
     }
 
-    const token = generateToken(user)
+    const safeUser = {
+      id: user.id.toString(),
+      full_name: user.full_name,
+      email: user.email,
+      role: user.role
+    }
+
+    const token = generateToken(safeUser)
 
     return res.status(200).json({
       success: true,
       message: 'Login successful.',
       token,
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        role: user.role
-      }
+      user: safeUser
     })
   } catch (error) {
     next(error)
